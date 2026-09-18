@@ -1,0 +1,32 @@
+{
+  "name": "pi-notify-when-unfocused",
+  "version": "0.1.0",
+  "description": "pi extension: get a macOS notification when pi needs your input but your terminal window is not focused",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "notifications",
+    "macos",
+    "ghostty"
+  ],
+  "license": "MIT",
+  "author": "Tong Wu",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tong-wu-umn/pi-notify-when-unfocused.git"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
