@@ -68,22 +68,36 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     /// One colour per state so the item reads at a glance; the glyphs already differ, so
-    /// the title stays usable when macOS overrides menu bar tinting.
+    /// the title stays usable when the colour is unavailable.
+    ///
+    /// Neutral states carry **no** foreground colour on purpose. A colour set inside
+    /// `attributedTitle` is drawn verbatim — AppKit re-tints a plain status item title
+    /// for the menu bar's appearance, but not an attributed one. `labelColor` and
+    /// `secondaryLabelColor` therefore resolved against the app's appearance instead of
+    /// the bar's and came out near-black on a tinted (dark/blue) menu bar: barely
+    /// visible. Leaving the attribute off makes AppKit draw the text exactly like a
+    /// plain status item title, so it matches the neighbouring system items in every
+    /// appearance. Alert states keep their explicit colour: they read on both light and
+    /// dark bars, and being seen is the entire point of them.
     private func attributedTitle(_ title: String, sessions: [Session]) -> NSAttributedString {
         let counts = TitleFormatter.summary(sessions)
         let base = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         let attributed = NSMutableAttributedString(string: title, attributes: [.font: base])
-        let color: NSColor
+        let alert: NSColor?
         if counts.blocked > 0 {
-            color = .systemRed
+            alert = .systemRed
         } else if counts.attention > 0 {
-            color = .systemOrange
-        } else if counts.working > 0 {
-            color = .labelColor
+            alert = .systemOrange
         } else {
-            color = .secondaryLabelColor
+            alert = nil
         }
-        attributed.addAttribute(.foregroundColor, value: color, range: NSRange(location: 0, length: attributed.length))
+        if let alert {
+            attributed.addAttribute(
+                .foregroundColor,
+                value: alert,
+                range: NSRange(location: 0, length: attributed.length)
+            )
+        }
         return attributed
     }
 

@@ -27,7 +27,9 @@ you are looking at none of them.
 Counts are bounded (`9+`), idle can be hidden, and the dropdown grows from the same data:
 workspace → tab → session, with `tool +N · elapsed · model · ctx%`, the blocked reason and
 waiting time, and a submenu for **Focus and acknowledge**, **Show details**, copy paths,
-and **Mark completed seen**.
+and **Mark completed seen**. The whole count is tinted red while something is blocked and
+orange while something finished unseen; the other states use the menu bar's own text
+colour, so the item reads like the system items next to it on any wallpaper.
 
 Acknowledgement is deliberate: a `○` means "finished and you have not looked at it yet".
 Focusing the pane, clicking the row, or choosing *Mark completed seen* clears it, and a

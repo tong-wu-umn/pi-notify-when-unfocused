@@ -529,10 +529,13 @@ Compact by construction — menu bar space is the scarcest resource.
 
 Order and glyphs: `!` blocked, `▶` working, `○` completed-attention, `·` idle. Prefix `π`.
 
-Colours (`attributedTitle`): blocked `NSColor.systemRed`, completed-attention `NSColor.systemOrange`,
-working `NSColor.labelColor`, idle `NSColor.secondaryLabelColor`, counts/glyph prefix
-`NSColor.secondaryLabelColor`. macOS menu bar tinting may override in some
-appearances — the layout must remain readable without colour, which is why glyphs
+Colours (`attributedTitle`): blocked `NSColor.systemRed`, completed-attention `NSColor.systemOrange`.
+The neutral states (working, idle, unknown) deliberately set **no** foreground colour:
+AppKit re-tints a plain status item title for the menu bar's appearance but draws an
+explicit `attributedTitle` colour verbatim, so `labelColor`/`secondaryLabelColor`
+resolved against the app's appearance (Aqua in light mode) and came out black on a
+dark-tinted menu bar. Omitting the attribute matches the neighbouring system items in
+every appearance — the layout stays readable without colour too, which is why glyphs
 differ per state. Tooltip carries the full plain-text summary, e.g.
 `π — 2 working (pi-notify-when-unfocused 12m, mobile_pda 3m) · 1 blocked 45s (jev-sts2) · 3 idle`.
 
