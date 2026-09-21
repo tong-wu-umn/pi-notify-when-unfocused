@@ -180,6 +180,7 @@ make probe-json            # same, machine readable
 | Rows but no herdr detail | `make probe` — the socket line says which candidate was chosen |
 | Multiple herdr sockets warning | set `herdrSocketPath` explicitly |
 | Click focuses the wrong thing | herdr selects the pane; your terminal must be able to activate. Rows with `pane=-` have no pane to select |
+| π appears, then quits ~15 s later | read `~/Library/Logs/PiMenuBar.log`; a crash leaves no "stopping" line. See the `@Sendable` note below |
 | `swift build` fails in release | `make build` builds only the app product; the test target needs debug (`@testable`) |
 
 ## Development notes
@@ -193,3 +194,11 @@ make probe-json            # same, machine readable
   `pane.agent_status_changed`); decoding normalizes the first separator.
 - Version: protocol 22 is the only herdr protocol this build accepts. Anything else runs
   in registry-only mode and says so in the menu.
+- Swift 6 concurrency footgun: `DispatchSource` handlers in this target must be written
+  `source.setEventHandler { @Sendable [weak self] in Task { @MainActor in ... } }`.
+  `DispatchSourceHandler` is a plain `@convention(block) () -> Void`, so an unannotated
+  closure literal written inside a `@MainActor` class inherits main-actor isolation — and
+  the compiler then inserts an isolation assertion that traps in
+  `dispatch_assert_queue` on the source's own queue. That killed the app 15 s in (first
+  registry heartbeat) with `EXC_BREAKPOINT` and no log line. `Timer` blocks and
+  `DispatchQueue.async` are fine: both are already `@Sendable`.

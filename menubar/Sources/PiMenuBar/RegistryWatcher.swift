@@ -99,10 +99,15 @@ final class RegistryWatcher {
             eventMask: [.write, .rename, .delete, .extend, .attrib, .link],
             queue: queue
         )
-        source.setEventHandler { [weak self] in
+        // `DispatchSourceHandler` is a plain (non-`@Sendable`) block, so a closure
+        // literal written here would inherit this type's `@MainActor` isolation and
+        // trap in `dispatch_assert_queue` the first time the source fires on `queue`.
+        // Marking the literal `@Sendable` keeps it nonisolated; the hop to the main
+        // actor happens explicitly inside.
+        source.setEventHandler { @Sendable [weak self] in
             Task { @MainActor in self?.scheduleScan() }
         }
-        source.setCancelHandler { [descriptor = directoryDescriptor] in
+        source.setCancelHandler { @Sendable [descriptor = directoryDescriptor] in
             if descriptor >= 0 { close(descriptor) }
         }
         source.resume()

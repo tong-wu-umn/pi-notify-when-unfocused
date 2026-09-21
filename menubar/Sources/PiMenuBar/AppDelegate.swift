@@ -27,10 +27,13 @@ final class ConfigLoader {
             eventMask: [.write, .rename, .delete],
             queue: queue
         )
-        source.setEventHandler { [weak self] in
+        // Nonisolated on purpose: the source fires on `queue`, so the block must not
+        // inherit `@MainActor` from this class (that would trap in
+        // `dispatch_assert_queue`). See RegistryWatcher for the same pattern.
+        source.setEventHandler { @Sendable [weak self] in
             Task { @MainActor in self?.reload() }
         }
-        source.setCancelHandler { [descriptor = descriptor] in
+        source.setCancelHandler { @Sendable [descriptor = descriptor] in
             if descriptor >= 0 { close(descriptor) }
         }
         source.resume()
