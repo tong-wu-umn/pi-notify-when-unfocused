@@ -22,6 +22,13 @@ Windows notifications are **pane-aware**: if you have several pi sessions in sev
 
 While a dialog stays open, a couple of reminders are sent (default: 2 more, 20s apart), and near-duplicate notifications are suppressed.
 
+## Related
+
+- **[PiMenuBar](menubar/)** — a menu bar status bar for all your pi sessions: how many are
+  working, which one is blocked, which one finished while you were away, with click-to-focus
+  on the right pane. Separate app, separate install (`cd menubar && make install`); this
+  extension stays notification-only.
+
 ## Requirements
 
 - macOS (the focus check is macOS-only; elsewhere the extension stays inert)

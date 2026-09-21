@@ -5,7 +5,8 @@
 | Branch | `menubar-status-bar` (off `main`) |
 | Status | Plan / not started |
 | Author | planning session, 2026-09-21 |
-| Last reviewed | architecture revision 2, 2026-09-21 |
+| Last reviewed | architecture revision 3 (post-implementation), 2026-09-21 |
+| Status | **Implemented** — see [§12 Implementation record](#12-implementation-record) for what changed against this plan |
 | Scope | A macOS menu bar (`NSStatusItem`) that shows brief, essential info about active interactive pi sessions and focuses the right pane on click. |
 
 ---
@@ -48,13 +49,18 @@ outputs are in [Appendix A](#appendix-a-raw-evidence).
 | 5 | herdr exposes a **push** channel: newline-delimited JSON over `HERDR_SOCKET_PATH` (`~/.config/herdr/herdr.sock`, mode `srw-------`), `events.subscribe` → `{"id":…,"result":{"type":"subscription_started"}}`, then `{"event":"<kind>","data":{…}}`. | Appendix A.3 |
 | 6 | Subscription events are **lossy by design**: no id, no sequence number, no replay. Ground truth must come from `session.snapshot`. | Appendix A.3 |
 | 7 | After `events.subscribe`, that socket becomes an event stream — later requests on the *same* connection are not answered. One connection per purpose. | Appendix A.4 |
-| 8 | `pane.updated` fires on **every output revision** (revisions 106→107 within seconds on a working pane). It must be throttled or avoided. | Appendix A.3 |
+| 8 | `pane.updated` fires on **every output revision** (revisions 106→107 within seconds on a working pane). It must be throttled or avoided. Also: the real event name is `pane_updated` (underscore), not `pane.updated`. | Appendix A.3, A.9 |
 | 9 | `pane.agent_status_changed` is low-frequency but needs an explicit `pane_id` per subscription, and carries only a small payload. | Appendix A.5 |
 | 10 | `herdr agent focus <pane_id>` resolves absolute targets (`agent get w1:p1` works; `agent focus nope:pX` → `agent_not_found`). `herdr pane focus` is **directional only** (`--direction left|right|up|down`) and cannot target a specific pane. | Appendix A.6 |
 | 11 | An explicit focus command **marks the agent seen** (done → idle). Clicking a row is therefore also "acknowledge". | `herdr --skill`, line 59 |
 | 12 | A pi extension can already report state to herdr today: `~/.pi/agent/extensions/herdr-agent-state.ts` (installed by herdr, `HERDR_INTEGRATION_VERSION=9`) sends `pane.report_agent` / `pane.report_agent_session` on `session_start` / `agent_start` / `agent_settled` and a `herdr:blocked` event. | file read, Appendix A.7 |
 | 13 | Extra display metadata can be pushed from pi: `pane.report_metadata` with `--title`, `--display-agent`, `--state-label <STATUS=TEXT>`, `--token <NAME=VALUE>`, `--ttl-ms`. | `herdr pane report-metadata --help`, schema `PaneReportMetadataParams` |
 | 14 | Node 26 runs TypeScript test files directly (`node --test tests/*.test.ts`), so pi-side tests need no build step. | `node --version` → v26.9.0 |
+| 15 | herdr mixes separators in event names: `pane_updated`, `pane_focused`, `tab_focused`, `workspace_focused` use underscores while `pane.agent_status_changed` uses dots. Matching must normalize the first separator. | Appendix A.9 |
+| 16 | `state_change_seq` exists only on `agents[]` in a snapshot — not on `panes[]` and not on any event payload — so completion acknowledgement needs a re-snapshot on status changes. | Appendix A.10 |
+| 17 | `agents[].tokens` and `agents[].state_labels` are absent for panes with no title suffix, so they must decode as optional. | Appendix A.10 |
+| 18 | Events are sparse when the fleet is quiet: a 22-subscription stream produced **zero** events in a 2-minute idle window. The initial snapshot plus the safety poll is what keeps the display correct, not the event rate. | Appendix A.11 |
+| 19 | Command Line Tools ships **no XCTest and no Testing module**, so `swift test` cannot link without Xcode. | Appendix A.12 |
 
 **Additional operational constraint.** An app launched by LaunchServices or a
 LaunchAgent does not inherit the shell environment of a terminal pane. The app must
@@ -111,6 +117,8 @@ Neither source writes the other's state. The app merges them and owns acknowledg
 | D4 | Registry = one file per pi process, monotonic `revision`, `updatedAt` heartbeat, atomic `rename`, mode `0600` in a `0700` directory | Independent writers, deterministic ordering, no partial reads, privacy for cwd/prompt metadata, and crash tolerance. A `kill -9`'d process simply stops heartbeating and ages out. |
 | D5 | Snapshot is ground truth; events are deltas; connect uses snapshot → subscribe → snapshot | Events carry no id/seq and are not replayed. The second snapshot closes the race between the first snapshot and subscription acknowledgement. |
 | D6 | Subscribe to `pane.agent_status_changed` per agent pane plus focus/detection/structural events; **do not** subscribe to `pane.updated` in v1 | `pane.updated` fires per output revision (fact 8). New/detected panes trigger a re-snapshot and subscription rebuild. |
+| D10 | Normalize event names before matching | herdr 0.9.1 mixes `pane_updated` and `pane.agent_status_changed` (fact 15); only the first separator is canonicalized so `agent_status_changed` survives. |
+| D11 | Re-snapshot on `pane.agent_status_changed` | The event carries no `state_change_seq` (fact 16), which completion acknowledgement needs. Status changes are low frequency. |
 | D7 | Focus via socket request `agent.focus {target: paneId}`, not a `herdr` subprocess | It is the same absolute primitive as the CLI, marks the target seen, and works when a login app has no shell `PATH`. |
 | D8 | Keep the implementation in this repo, but as a **separate install surface** under `menubar/` | Adding another file under root `extensions/` would silently load it for every existing `pi-notify-when-unfocused` user because the package discovers that directory. `menubar/extension/` is installed only by the menu-bar installer; the root pi package remains notification-only. |
 | D9 | V1 connects to one local herdr server | Socket discovery precedence: explicit config → fresh registry entries → app environment → `~/.config/herdr/herdr.sock`. Multiple distinct live sockets produce a warning instead of silently merging servers. |
@@ -809,7 +817,87 @@ herdr and overwritten on reinstall): subscribes to `session_start` / `agent_star
 `seq`. This is why `agent_status` and `state_labels` are already populated for pi panes,
 and why our extension must not duplicate that reporting (R6).
 
+**A.9 Real event names (live subscription, 22 subscription types)**
+```console
+NEW event="pane_focused"               data.type="pane_focused"               dataKeys=pane_id|type|workspace_id
+NEW event="tab_focused"                data.type="tab_focused"                dataKeys=tab_id|type|workspace_id
+NEW event="workspace_focused"          data.type="workspace_focused"          dataKeys=type|workspace_id
+EVT {"data":{"pane":{...}},"event":"pane_updated"}            # underscore
+EVT {"data":{"agent":"pi",...},"event":"pane.agent_status_changed"}   # dots
+```
+Only the first separator is canonicalized, because `agent_status_changed` is part of the
+name.
+
+**A.10 `state_change_seq` and optional agent fields** — `snapshot.agents[].state_change_seq`
+is present (`239`, `27`, `228` for three panes) but `snapshot.panes[]` has no
+`state_change_seq` at all, and no event payload carries it. Separately, `tokens` and
+`state_labels` appear only on panes with a title suffix, so a strict decoder fails on the
+fixture (`Key 'tokens' not found ... Path: agents[0]`).
+
+**A.11 Events are sparse when idle** — a subscription to 22 event kinds produced zero
+events in a two-minute window while the fleet was quiet; the same subscription produced
+`pane_updated` events within seconds while another pane was streaming. The initial
+snapshot and the periodic re-sync carry the display.
+
+**A.12 No XCTest in Command Line Tools**
+```console
+$ ls /Library/Developer/CommandLineTools/usr/lib/swift/macosx/   # no XCTest
+$ find /Library/Developer/CommandLineTools -name 'XCTest*'      # nothing
+$ xcode-select -p                                               # /Library/Developer/CommandLineTools
+```
+Hence the harness executable in `Tests/PiMenuBarTests/TestHarness.swift`.
+
 **A.8 pi UI surface** — `docs/extensions.md:2600` ("Widgets, Status, and Footer"),
 `docs/tui.md:768`, `dist/core/extensions/types.d.ts:81` (`setStatus(key, text)`), and
 `docs/extensions.md:998` (fire-and-forget methods incl. `setStatus`) — all terminal-only;
 no macOS menu bar API exists.
+
+---
+
+## 12. Implementation record
+
+Built 2026-09-21 on branch `menubar-status-bar`. Everything is in `menubar/`; the root pi
+package and `extensions/notify-when-unfocused.ts` are untouched, so existing
+`pi-notify-when-unfocused` users are unaffected.
+
+### What exists
+
+| Path | Contents |
+|---|---|
+| `menubar/Sources/PiMenuBarCore/` | Models, config, NDJSON framing, protocol-22 decoding, registry reader, acknowledgements, merge, grouping, title formatting, `AF_UNIX` client (`Foundation` only) |
+| `menubar/Sources/PiMenuBar/` | AppKit shell: status item + menu, herdr client, registry watcher, focuser, config loader, logging, `--probe` |
+| `menubar/extension/` | pi publisher (`index.ts`), pure logic (`state.ts`), tests |
+| `menubar/dev/fake-sessions.sh` | Expiring simulated rows for layout/sorting work |
+| `menubar/Makefile`, `Resources/Info.plist` | Bundle, run, test, install, uninstall, dist |
+| `menubar/Tests/PiMenuBarTests/` | 97 tests + real herdr wire fixtures |
+
+Verified end to end against a live herdr 0.9.1 / protocol 22 with three pi panes:
+`make probe` prints the merged fleet, grouped by workspace → tab, with the real state
+labels; the app connects, renders, and refuses a second instance.
+
+### Deviations from this plan
+
+| Plan said | Built | Why |
+|---|---|---|
+| `swift test` with XCTest | `swift run PiMenuBarTests` harness | CLT ships no XCTest/Testing (fact 19). `make test` runs the Swift suite plus `node --test extension/` |
+| `swift build` | `swift build --product PiMenuBar` | The test target uses `@testable import`, which SwiftPM enables for debug builds only |
+| Extension at `extensions/session-status.ts` | `menubar/extension/index.ts` | Auto-discovery needs `index.ts` in a directory; the dir is symlinked/copied into `~/.pi/agent/extensions/pi-menubar` |
+| Delete the registry file on `session_shutdown` | Delete only when `reason == "quit"` | A replacement (reload/new/resume/fork) is followed by another `session_start` in the same process; deleting first lost the revision seed and flickered the row |
+| `registry v1` has `state: idle｜working｜blocked` plus optional `error` | No `error` state | pi exposes no documented error signal; inventing one from assistant stop reasons was not worth the false positives |
+| Acknowledgement keyed on `state_change_seq` from events | Re-snapshot on status changes | Events carry no `state_change_seq` (fact 16) |
+| `pane.updated` throttled fallback | Not subscribed at all | Two captures showed it firing per output revision and zero times while idle (facts 8, 18) |
+| Tests for `state_change_seq` stability as a P1 gate | Still captured as a fixture, not yet an asserted invariant | The app uses it only to compare one completion generation against the last acknowledged one, and falls back to timestamps when absent |
+
+### Known limitations
+
+1. **`state_change_seq` stability is unverified long-term.** If herdr bumps it for
+   metadata-only updates, an acknowledged completion could re-flag once. Mitigated by
+   comparing against the acknowledged generation and by `settledAt` fallback.
+2. **Non-herdr focus is app-level only.** Without a pane id, the app can activate the
+   terminal but not select a tab or split.
+3. **`terminalBundleId` is learned from the registry.** A herdr-only row in a terminal
+   that never published has no bundle id unless `terminalBundleId` is configured.
+4. **The menu bar title cannot show which specific session needs you** — only counts.
+   That is the dropdown's job, by design (R4).
+5. **`--probe` and the app share the discovery rules but not the code path** for events;
+   the event path is exercised by fixtures and socket tests rather than a live assertion.
