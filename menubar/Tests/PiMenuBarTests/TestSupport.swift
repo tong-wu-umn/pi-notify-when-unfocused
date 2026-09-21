@@ -51,6 +51,66 @@ enum TestSupport {
         try! HerdrCoding.decodeFrame(Data(Fixtures.snapshotJSON.utf8), as: HerdrSnapshot.self)
     }
 
+    /// Builds a merged `Session` directly. Policy tests care about the fields the
+    /// notification decision reads, so they are all explicit here.
+    static func session(
+        key: String = Fixtures.registrySessionFile,
+        project: String = "pi-notify-when-unfocused",
+        cwd: String = "/Users/tongwu/Downloads/project/pi-notify-when-unfocused",
+        state: SessionState = .blocked,
+        updatedAt: Date = Date(millis: 1_758_450_000_000),
+        sessionName: String? = nil,
+        waitingSince: Date? = nil,
+        settledAt: Date? = nil,
+        runStartedAt: Date? = nil,
+        herdr: HerdrRef? = nil,
+        terminalBundleId: String? = "com.mitchellh.ghostty",
+        simulated: Bool = false
+    ) -> Session {
+        Session(
+            key: key,
+            source: herdr == nil ? .registry : .herdrAndRegistry,
+            project: project,
+            cwd: cwd,
+            state: state,
+            updatedAt: updatedAt,
+            sessionName: sessionName,
+            sessionFile: key.hasPrefix("/") ? key : nil,
+            activeTools: [],
+            runStartedAt: runStartedAt,
+            waitingSince: waitingSince,
+            settledAt: settledAt,
+            herdr: herdr,
+            terminalBundleId: terminalBundleId,
+            simulated: simulated
+        )
+    }
+
+    /// Notification config with the master switch on, so policy tests do not have to
+    /// repeat it.
+    static func notifications(
+        reminders: Int = 2,
+        reminderIntervalMs: Int = 20_000,
+        dedupeMs: Int = 10_000,
+        idleMinRunMs: Int = 15_000,
+        notifyOnPrompts: Bool = true,
+        notifyOnIdle: Bool = true,
+        notifyUnknownDurationCompletions: Bool = false,
+        showProjectName: Bool = true
+    ) -> NotificationConfig {
+        var config = NotificationConfig()
+        config.enabled = true
+        config.reminders = reminders
+        config.reminderIntervalMs = reminderIntervalMs
+        config.dedupeMs = dedupeMs
+        config.idleMinRunMs = idleMinRunMs
+        config.notifyOnPrompts = notifyOnPrompts
+        config.notifyOnIdle = notifyOnIdle
+        config.notifyUnknownDurationCompletions = notifyUnknownDurationCompletions
+        config.showProjectName = showProjectName
+        return config
+    }
+
     /// A temp directory that removes itself when the test object is deallocated.
     final class TempDirectory {
         let path: String

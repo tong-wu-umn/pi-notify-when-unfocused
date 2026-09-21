@@ -18,7 +18,7 @@ LAUNCH_AGENT := $(HOME)/Library/LaunchAgents/$(BUNDLE_ID).plist
 GUI_DOMAIN := gui/$(shell id -u)
 
 .DEFAULT_GOAL := help
-.PHONY: help build test probe run app install install-app install-extension install-agent uninstall clean dist
+.PHONY: help build test probe run app icon install install-app install-extension install-agent uninstall clean dist
 
 help:
 	@echo "PiMenuBar $(VERSION)"
@@ -28,6 +28,7 @@ help:
 	@echo "  make probe              print what the menu bar would show right now"
 	@echo "  make probe-json         same, as JSON (good for scripts)"
 	@echo "  make app                assemble .build/PiMenuBar.app"
+	@echo "  make icon               regenerate Resources/PiMenuBar.icns"
 	@echo "  make run                build the bundle and launch it"
 	@echo "  make install            app + extension + LaunchAgent (login item)"
 	@echo "  make install-extension  only the pi extension (symlink, for development)"
@@ -54,10 +55,15 @@ app: build
 	@rm -rf "$(APP_BUNDLE)"
 	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS" "$(APP_BUNDLE)/Contents/Resources"
 	@cp "$(BUILD_DIR)/$(APP_NAME)" "$(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)"
+	@cp Resources/PiMenuBar.icns "$(APP_BUNDLE)/Contents/Resources/PiMenuBar.icns"
 	@sed -e 's/<string>0\.1\.0<\/string>/<string>$(VERSION)<\/string>/' Resources/Info.plist > "$(APP_BUNDLE)/Contents/Info.plist"
 	@printf 'APPL????' > "$(APP_BUNDLE)/Contents/PkgInfo"
 	@codesign --force --sign - "$(APP_BUNDLE)" 2>/dev/null || echo "note: ad-hoc codesign skipped"
 	@echo "built $(APP_BUNDLE)"
+
+# Only needed when the mark changes: the generated .icns is committed.
+icon:
+	@swift dev/make-icon.swift Resources/PiMenuBar.icns
 
 run: app
 	@open "$(APP_BUNDLE)"
@@ -101,6 +107,13 @@ install: install-app install-extension install-agent
 	@echo "PiMenuBar installed. Notes:"
 	@echo "  • the app is a login item now; quit it from its menu to stop it"
 	@echo "  • pi sessions must /reload once to publish registry data"
+	@echo ""
+	@echo "Native notifications are off until you opt in (they would double up with"
+	@echo "the notify-when-unfocused extension otherwise):"
+	@echo "  1. set \"notifications\": { \"enabled\": true } in ~/.pi/agent/menubar.json"
+	@echo "  2. disable the root extension (\"enabled\": false in"
+	@echo "     ~/.pi/agent/notify-when-unfocused.json, then /reload)"
+	@echo "  3. menu bar → Send test notification"
 
 uninstall:
 	@-launchctl bootout $(GUI_DOMAIN) "$(LAUNCH_AGENT)" 2>/dev/null

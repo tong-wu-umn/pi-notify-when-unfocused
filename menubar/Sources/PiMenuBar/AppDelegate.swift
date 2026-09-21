@@ -63,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var client: HerdrClient!
     private var registry: RegistryWatcher!
     private var statusItem: StatusItemController!
+    private var notifications: NotificationCoordinator!
     private let focuser = Focuser()
     private var instanceLock: InstanceLock?
 
@@ -92,8 +93,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             config: { [weak self] in self?.configLoader.current ?? MenuBarConfig() },
             acknowledgements: { [weak self] in self?.store.acknowledgements ?? AcknowledgementStore() }
         )
+        notifications = NotificationCoordinator(
+            store: store,
+            client: client,
+            config: { [weak self] in self?.configLoader.current ?? MenuBarConfig() }
+        )
 
         wire()
+        notifications.start()
         registry.start()
         client.start()
         configLoader.start()
@@ -121,7 +128,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         registry.onChange = recompute
         client.onChange = recompute
-        store.onChange = { [weak self] in self?.statusItem.scheduleRender() }
+        store.onChange = { [weak self] in
+            guard let self else { return }
+            self.statusItem.scheduleRender()
+            // Every merged change is a chance for a wait to begin, end, or be answered.
+            self.notifications.reconcile()
+        }
+        notifications.onChange = { [weak self] in self?.statusItem.scheduleRender() }
+        notifications.onFocusSession = { [weak self] session in self?.focus(session) }
+        notifications.onAcknowledgeSession = { [weak self] session in self?.store.acknowledge(session) }
         configLoader.onChange = { [weak self] in
             guard let self else { return }
             self.client.reconnect(reason: "config change")
@@ -140,26 +155,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.onAcknowledge = { [weak self] session in
             self?.store.acknowledge(session)
         }
-        statusItem.onFocus = { [weak self] session in
+        statusItem.onFocus = { [weak self] session in self?.focus(session) }
+        statusItem.notificationStatus = { [weak self] in self?.notifications.status ?? .disabled }
+        statusItem.onTestNotification = { [weak self] in
             guard let self else { return }
-            Task { @MainActor in
-                let outcome = await self.focuser.focus(
-                    session,
-                    via: self.client,
-                    defaultBundleId: self.configLoader.current.terminalBundleId
-                )
-                switch outcome {
-                case let .focused(label):
-                    Log.shared.info("focused \(label) (pane \(session.herdr?.paneId ?? "?"))")
-                    self.store.acknowledge(session)
-                case let .partial(note):
-                    Log.shared.warn("partially focused \(session.label): \(note)")
-                    if session.herdr != nil { self.store.acknowledge(session) }
-                case let .failed(reason):
-                    Log.shared.error("could not focus \(session.label): \(reason)")
-                }
+            Task { @MainActor in await self.notifications.sendTestNotification() }
+        }
+        statusItem.onOpenNotificationSettings = { Self.openNotificationSettings() }
+    }
+
+    /// Focus a session and acknowledge it exactly like clicking its row: the menu and a
+    /// notification action must not be able to disagree about what "focus" means.
+    private func focus(_ session: Session) {
+        Task { @MainActor in
+            let outcome = await focuser.focus(
+                session,
+                via: client,
+                defaultBundleId: configLoader.current.terminalBundleId
+            )
+            switch outcome {
+            case let .focused(label):
+                Log.shared.info("focused \(label) (pane \(session.herdr?.paneId ?? "?"))")
+                store.acknowledge(session)
+            case let .partial(note):
+                Log.shared.warn("partially focused \(session.label): \(note)")
+                if session.herdr != nil { store.acknowledge(session) }
+            case let .failed(reason):
+                Log.shared.error("could not focus \(session.label): \(reason)")
             }
         }
+    }
+
+    /// Opens the Notifications pane; the deep link has changed names across releases, so
+    /// try the known spellings before giving up.
+    private static func openNotificationSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.notifications",
+        ]
+        for candidate in candidates {
+            guard let url = URL(string: candidate) else { continue }
+            if NSWorkspace.shared.open(url) { return }
+        }
+        Log.shared.warn("could not open the Notifications settings pane")
     }
 
     private static func reveal(path: String) {

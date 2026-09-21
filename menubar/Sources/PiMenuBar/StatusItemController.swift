@@ -26,6 +26,9 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var onRevealRegistry: (() -> Void)?
     var onFocus: ((Session) -> Void)?
     var onAcknowledge: ((Session) -> Void)?
+    var notificationStatus: (() -> NotificationStatus)?
+    var onTestNotification: (() -> Void)?
+    var onOpenNotificationSettings: (() -> Void)?
 
     init(store: SessionStore, client: HerdrClient, config: @escaping () -> MenuBarConfig, acknowledgements: @escaping () -> AcknowledgementStore) {
         self.store = store
@@ -195,6 +198,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        addNotificationItems()
         addAction("Refresh now", #selector(refreshNow), key: "r")
         addAction("Open config…", #selector(revealConfig), key: "")
         addAction("Open registry folder", #selector(revealRegistry), key: "")
@@ -258,6 +262,23 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         return item
     }
 
+    /// Notification state, test delivery, and a way into System Settings. Kept in the
+    /// menu (not only in the log) because "why did I not get a banner" is otherwise
+    /// invisible for an accessory app with no window.
+    private func addNotificationItems() {
+        let status = notificationStatus?() ?? .disabled
+        let line = NSMenuItem(title: "Notifications: \(status.label)", action: nil, keyEquivalent: "")
+        line.isEnabled = false
+        menu.addItem(line)
+
+        let test = NSMenuItem(title: "Send test notification", action: #selector(testNotification), keyEquivalent: "")
+        test.target = self
+        test.isEnabled = status.canRequestPermission
+        menu.addItem(test)
+
+        addAction("Open Notification Settings…", #selector(openNotificationSettings), key: "")
+    }
+
     private func addAction(_ title: String, _ selector: Selector, key: String) {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: key)
         item.target = self
@@ -271,6 +292,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     @objc private func revealLog() { onRevealLog?() }
+    @objc private func testNotification() { onTestNotification?() }
+    @objc private func openNotificationSettings() { onOpenNotificationSettings?() }
     @objc private func revealConfig() { onRevealConfig?() }
     @objc private func revealRegistry() { onRevealRegistry?() }
     @objc private func quit() { NSApp.terminate(nil) }

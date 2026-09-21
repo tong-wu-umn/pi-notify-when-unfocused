@@ -26,8 +26,13 @@ While a dialog stays open, a couple of reminders are sent (default: 2 more, 20s 
 
 - **[PiMenuBar](menubar/)** — a menu bar status bar for all your pi sessions: how many are
   working, which one is blocked, which one finished while you were away, with click-to-focus
-  on the right pane. Separate app, separate install (`cd menubar && make install`); this
-  extension stays notification-only.
+  on the right pane. Separate app, separate install (`cd menubar && make install`).
+
+  PiMenuBar can also post the banners itself (opt-in: `"notifications": {"enabled": true}`
+  in `~/.pi/agent/menubar.json`), which drops the Ghostty attribution, the terminal's rate
+  limiting, and the “no banner while Ghostty is active” rule, and adds **Focus session** /
+  **Mark seen** actions to the banner. **Pick one channel, not both** — with this extension
+  and PiMenuBar's notifications enabled at once, a single wait can alert twice.
 
 ## Requirements
 

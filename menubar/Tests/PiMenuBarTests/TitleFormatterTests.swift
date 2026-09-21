@@ -242,4 +242,58 @@ func registerConfigTests(_ t: TestRunner) {
         expectFalse(MenuBarConfig().resolvedRegistryDir.hasPrefix("~"))
         expectTrue(MenuBarConfig().resolvedRegistryDir.hasPrefix("/"))
     }
+
+    t.test("NativeNotificationsAreOffByDefault") {
+        let config = MenuBarConfig()
+        expectFalse(config.notifications.enabled, "enabling by default would alert twice for /nudge users")
+        expectTrue(config.notifications.notifyOnPrompts)
+        expectTrue(config.notifications.notifyOnIdle)
+        expectEqual(config.notifications.idleMinRunMs, 15_000)
+        expectEqual(config.notifications.reminders, 2)
+        expectFalse(config.notifications.notifyUnknownDurationCompletions)
+        expectTrue(config.notifications.preciseFocus)
+        expectTrue(config.notifications.sound)
+        expectTrue(MenuBarConfig.notificationRoutesPath.hasPrefix("/"))
+    }
+
+    t.test("NotificationsBlockLoadsAndClamps") {
+        let directory = TestSupport.TempDirectory()
+        let path = directory.write("config.json", """
+        {
+          "notifications": {
+            "enabled": true,
+            "notifyOnPrompts": false,
+            "notifyOnIdle": true,
+            "idleMinRunMs": 2500,
+            "reminders": 99,
+            "reminderIntervalMs": 1,
+            "dedupeMs": -5,
+            "sound": false,
+            "preciseFocus": false,
+            "notifyUnknownDurationCompletions": true,
+            "showProjectName": false,
+            "somethingNew": true
+          }
+        }
+        """)
+        let config = MenuBarConfig.load(path: path)
+        expectTrue(config.notifications.enabled)
+        expectFalse(config.notifications.notifyOnPrompts)
+        expectTrue(config.notifications.notifyOnIdle)
+        expectEqual(config.notifications.idleMinRunMs, 2_500)
+        expectEqual(config.notifications.reminders, 10, "clamped")
+        expectEqual(config.notifications.reminderIntervalMs, 5_000, "clamped")
+        expectEqual(config.notifications.dedupeMs, 0, "clamped")
+        expectFalse(config.notifications.sound)
+        expectFalse(config.notifications.preciseFocus)
+        expectTrue(config.notifications.notifyUnknownDurationCompletions)
+        expectFalse(config.notifications.showProjectName)
+    }
+
+    t.test("AMalformedNotificationsBlockKeepsTheDefaults") {
+        let directory = TestSupport.TempDirectory()
+        let path = directory.write("config.json", "{\"notifications\": \"yes please\"}")
+        expectEqual(MenuBarConfig.load(path: path).notifications, NotificationConfig())
+        expectEqual(MenuBarConfig.load(path: path).notifications.enabled, false)
+    }
 }

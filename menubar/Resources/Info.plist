@@ -10,6 +10,9 @@
 	<string>dev.tongwu.PiMenuBar</string>
 	<key>CFBundleExecutable</key>
 	<string>PiMenuBar</string>
+	<!-- The icon is what Notification Center shows next to a banner. -->
+	<key>CFBundleIconFile</key>
+	<string>PiMenuBar</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

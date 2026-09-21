@@ -37,6 +37,73 @@ repeated `idle` heartbeat can never resurrect it.
 
 ---
 
+## Native notifications (optional)
+
+PiMenuBar can also post the banners itself, so the sender is **PiMenuBar** instead of
+Ghostty. That is a different bargain from the terminal-transport notifications in
+[pi-notify-when-unfocused](../README.md):
+
+| | PiMenuBar native | `/nudge` (OSC 777 via Ghostty) |
+|---|---|---|
+| Shown as | PiMenuBar, its own icon | Ghostty |
+| Suppressed while the sender is frontmost | effectively never (accessory app) | yes, while Ghostty is active |
+| Ghostty's rate limiter / “clear on activation” | not involved | applies |
+| Actions on the banner | **Focus session**, **Mark seen**, dismiss | none |
+| Needs | notification permission | Ghostty + `/nudge` installed |
+
+Both channels are independent and **you should use only one**; otherwise one wait can
+ring twice. Native notifications are therefore **off by default**.
+
+### Turning them on
+
+1. install PiMenuBar (`make install`) and run `/reload` once in each pi session;
+2. add the block below to `~/.pi/agent/menubar.json`;
+3. stop the other channel: set `"enabled": false` in
+   `~/.pi/agent/notify-when-unfocused.json` and `/reload` (or uninstall the root extension);
+4. menu bar → **Send test notification** to grant permission and confirm the sender.
+
+```json
+{
+  "notifications": {
+    "enabled": true
+  }
+}
+```
+
+What alerts, and what does not:
+
+- a **blocking dialog** appears (approve/reject, select, input, editor) and you are
+  looking at a different app or a different terminal pane;
+- a run settles after at least `idleMinRunMs` while you are away;
+- up to `reminders` extra nudges while the *same* prompt is still open;
+- nothing for a prompt that was already open when PiMenuBar started, nothing for short
+  replies, and nothing for `/menubar simulate` — a restart never replays old banners.
+
+Banner text is deliberately generic (`Approval or input is needed in <project>.`) and the
+notification payload contains only an opaque id: prompts, tool names, commands, paths, and
+working directories never reach Notification Center, which is visible on the lock screen
+and keeps items after the session has ended. Set `"showProjectName": false` to hide the
+project name as well.
+
+Actions map to the same code as the menu rows, so **Focus session** selects the exact
+herdr pane and activates the terminal, and **Mark seen** clears the `○` without focusing.
+Dismissing a banner stops its reminders but deliberately does *not* mark anything seen.
+
+A banner is removed as soon as its wait is over (the prompt was answered, the completion
+was acknowledged, the session disappeared, or notifications were switched off).
+
+### Pane-precise suppression
+
+To tell “you are looking at this session” from “you are looking at another Ghostty pane”,
+PiMenuBar uses herdr's selected pane when it is available, and otherwise asks Ghostty
+which terminal has focus. The Ghostty query needs one-time Automation permission
+(*System Settings → Privacy & Security → Automation → PiMenuBar → Ghostty*); until it is
+granted, PiMenuBar assumes you are looking at the session and stays quiet rather than
+interrupting the pane in use. A failed probe backs off for a minute instead of retrying on
+every alert.
+
+---
+
 ## Requirements
 
 - macOS 13 or newer
@@ -118,7 +185,20 @@ ignored, malformed files fall back to defaults, and the app reloads on change:
   "herdrSocketPath": null,
   "terminalBundleId": null,
   "ackRetentionDays": 30,
-  "logLevel": "info"
+  "logLevel": "info",
+  "notifications": {
+    "enabled": false,
+    "notifyOnPrompts": true,
+    "notifyOnIdle": true,
+    "idleMinRunMs": 15000,
+    "reminders": 2,
+    "reminderIntervalMs": 20000,
+    "dedupeMs": 10000,
+    "sound": true,
+    "preciseFocus": true,
+    "notifyUnknownDurationCompletions": false,
+    "showProjectName": true
+  }
 }
 ```
 
@@ -129,6 +209,9 @@ ignored, malformed files fall back to defaults, and the app reloads on change:
 | `hideWhenEmpty` | Off, so the menu stays reachable (Config/Log/Quit) when no session is running |
 | `herdrSocketPath` | Only needed when the app cannot discover herdr itself (see below) |
 | `terminalBundleId` | Fallback host terminal for herdr rows with no registry record |
+| `notifications.*` | Native banners. Off by default; see [Native notifications](#native-notifications-optional) |
+| `notifications.dedupeMs` | Suppresses a second banner this soon after the previous one, across sessions |
+| `notifications.notifyUnknownDurationCompletions` | Off, because a herdr-only `done` row cannot prove the run was not a two-second reply |
 
 Extension env overrides: `PI_MENUBAR_ENABLED=0` (disable one session),
 `PI_MENUBAR_REGISTRY_DIR=/somewhere/else`.
@@ -168,8 +251,12 @@ make probe-json            # same, machine readable
 ## What it deliberately does not do
 
 - No prompt submission, no approval, no killing sessions from the menu.
-- No notifications: [pi-notify-when-unfocused](../README.md) owns "you are away, here is a
-  banner". They compose, and neither requires the other.
+- No notifications of its own until you ask for them: the terminal-transport channel in
+  [pi-notify-when-unfocused](../README.md) stays the default, and the two must not be
+  enabled together.
+- No custom toast, popover, or overlay. Banners are ordinary macOS notifications, so
+  Focus mode, per-app settings, and Notification Center history keep working.
+- Does not read macOS Focus/DND state: there is no supported API for it.
 - Not a dashboard for remote machines: one local herdr server at a time.
 - No TLS/network surface at all: one Unix socket, one local directory.
 
@@ -181,6 +268,11 @@ make probe-json            # same, machine readable
 | π but no sessions | `/menubar status` in pi — is this session publishing? (headless modes don't, by default) |
 | Rows but no herdr detail | `make probe` — the socket line says which candidate was chosen |
 | Multiple herdr sockets warning | set `herdrSocketPath` explicitly |
+| No banner, `Notifications: Permission required` in the menu | click **Send test notification** and allow it |
+| `authorization request failed: Notifications are not allowed for this application` in the log | macOS refused to show the consent prompt and marked the app denied. Turn **PiMenuBar** on by hand in *System Settings → Notifications*, then **Send test notification** again — the app picks the new state up within ~30 s without a restart |
+| No banner, `Notifications: Off (menubar.json)` | add `"notifications": {"enabled": true}` to `~/.pi/agent/menubar.json` |
+| Banners arrive twice | two channels are on: disable `/nudge` (`~/.pi/agent/notify-when-unfocused.json`) or set `notifications.enabled: false` |
+| No banner while looking at another Ghostty pane | the Automation probe failed; see [Pane-precise suppression](#pane-precise-suppression) and `~/Library/Logs/PiMenuBar.log` |
 | Click focuses the wrong thing | herdr selects the pane; your terminal must be able to activate. Rows with `pane=-` have no pane to select |
 | π appears, then quits ~15 s later | read `~/Library/Logs/PiMenuBar.log`; a crash leaves no "stopping" line. See the `@Sendable` note below |
 | `swift build` fails in release | `make build` builds only the app product; the test target needs debug (`@testable`) |
@@ -188,14 +280,20 @@ make probe-json            # same, machine readable
 ## Development notes
 
 - `swift test` is unavailable with Command Line Tools only (no XCTest), so the suite runs
-  as a normal executable: `make test` → `swift run PiMenuBarTests` (97 tests) plus
-  `node --test extension/` (25 tests). `PiMenuBarCore` holds everything testable; the
-  AppKit shell is deliberately thin.
+  as a normal executable: `make test` → `swift run PiMenuBarTests` (140 tests) plus
+  `node --test extension/` (25 tests). `PiMenuBarCore` holds everything testable —
+  including the notification decision table and the focus rules — and the AppKit shell is
+  deliberately thin.
 - Real wire fixtures live in `Tests/PiMenuBarTests/Fixtures.swift`, captured from a live
   herdr 0.9.1. Note that herdr mixes event-name separators (`pane_updated` vs
   `pane.agent_status_changed`); decoding normalizes the first separator.
 - Version: protocol 22 is the only herdr protocol this build accepts. Anything else runs
   in registry-only mode and says so in the menu.
+- Notification decisions (generations, reminders, dedupe, baseline, privacy) live in
+  `Sources/PiMenuBarCore/NotificationPolicy.swift`; `NotificationCoordinator` only
+  executes them. Records of posted banners belong to the app:
+  `~/Library/Application Support/PiMenuBar/notification-routes.json` (0700/0600, atomically
+  replaced, pruned after 7 days).
 - Swift 6 concurrency footgun: `DispatchSource` handlers in this target must be written
   `source.setEventHandler { @Sendable [weak self] in Task { @MainActor in ... } }`.
   `DispatchSourceHandler` is a plain `@convention(block) () -> Void`, so an unannotated

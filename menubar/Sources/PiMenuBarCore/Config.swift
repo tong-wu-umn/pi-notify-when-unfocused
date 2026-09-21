@@ -25,6 +25,9 @@ public struct MenuBarConfig: Sendable, Equatable {
     public var terminalBundleId: String?
     public var ackRetentionDays: Int = 30
     public var logLevel: LogLevel = .info
+    /// PiMenuBar-owned native notifications. Off by default: enabling them while the
+    /// root `notify-when-unfocused` extension is still loaded would alert twice.
+    public var notifications = NotificationConfig()
 
     public enum LogLevel: String, Sendable, Codable, CaseIterable {
         case debug, info, warn, error
@@ -48,6 +51,13 @@ public struct MenuBarConfig: Sendable, Equatable {
     public static var lockPath: String {
         let base = ("~/Library/Application Support/PiMenuBar" as NSString).expandingTildeInPath
         return (base as NSString).appendingPathComponent("instance.lock")
+    }
+
+    /// Opaque native-notification action routes (session key → request id). Kept out of
+    /// the notification payload so nothing identifying reaches Notification Center.
+    public static var notificationRoutesPath: String {
+        let base = ("~/Library/Application Support/PiMenuBar" as NSString).expandingTildeInPath
+        return (base as NSString).appendingPathComponent("notification-routes.json")
     }
 
     public static var logPath: String {
@@ -82,6 +92,9 @@ public struct MenuBarConfig: Sendable, Equatable {
         if let value = raw["terminalBundleId"] as? String { config.terminalBundleId = value }
         if let value = int(raw["ackRetentionDays"]) { config.ackRetentionDays = clamp(value, 1, 3_650) }
         if let value = raw["logLevel"] as? String, let level = LogLevel(rawValue: value) { config.logLevel = level }
+        if let value = raw["notifications"] as? [String: Any] {
+            config.notifications = NotificationConfig.parse(value)
+        }
 
         // A heartbeat slower than the staleness window would make every row look dead.
         if config.heartbeatMs * 4 > config.staleAfterMs { config.staleAfterMs = config.heartbeatMs * 4 }
@@ -99,5 +112,64 @@ public struct MenuBarConfig: Sendable, Equatable {
         case let value as NSNumber: return value.intValue
         default: return nil
         }
+    }
+}
+
+/// Policy for PiMenuBar-owned native notifications.
+///
+/// Everything here is about *whether* an alert is warranted; the delivery mechanics live
+/// in the app target. Defaults mirror the root `notify-when-unfocused` extension so the
+/// two channels behave alike when a user switches from one to the other — except for
+/// `enabled`, which starts false so no existing install suddenly alerts twice.
+public struct NotificationConfig: Sendable, Equatable {
+    public var enabled: Bool = false
+    public var notifyOnPrompts: Bool = true
+    public var notifyOnIdle: Bool = true
+    /// A completed run shorter than this stays quiet. 0 disables the filter.
+    public var idleMinRunMs: Int = 15_000
+    /// Extra nudges while the *same* prompt is still open.
+    public var reminders: Int = 2
+    public var reminderIntervalMs: Int = 20_000
+    /// Suppress an alert this soon after the previous one, across sessions.
+    public var dedupeMs: Int = 10_000
+    public var sound: Bool = true
+    /// Ask Ghostty which terminal pane is focused when herdr cannot say.
+    public var preciseFocus: Bool = true
+    /// Alert for a completion whose run duration is not published. Off by default:
+    /// a herdr-only `done` row cannot be distinguished from a two-second reply.
+    public var notifyUnknownDurationCompletions: Bool = false
+    /// Off means bodies say "A pi session" instead of naming the project.
+    public var showProjectName: Bool = true
+
+    public init() {}
+
+    /// Parses the `notifications` object, keeping defaults for anything malformed.
+    public static func parse(_ raw: [String: Any]) -> NotificationConfig {
+        var config = NotificationConfig()
+        if let value = raw["enabled"] as? Bool { config.enabled = value }
+        if let value = raw["notifyOnPrompts"] as? Bool { config.notifyOnPrompts = value }
+        if let value = raw["notifyOnIdle"] as? Bool { config.notifyOnIdle = value }
+        if let value = int(raw["idleMinRunMs"]) { config.idleMinRunMs = clamp(value, 0, 600_000) }
+        if let value = int(raw["reminders"]) { config.reminders = clamp(value, 0, 10) }
+        if let value = int(raw["reminderIntervalMs"]) { config.reminderIntervalMs = clamp(value, 5_000, 600_000) }
+        if let value = int(raw["dedupeMs"]) { config.dedupeMs = clamp(value, 0, 600_000) }
+        if let value = raw["sound"] as? Bool { config.sound = value }
+        if let value = raw["preciseFocus"] as? Bool { config.preciseFocus = value }
+        if let value = raw["notifyUnknownDurationCompletions"] as? Bool { config.notifyUnknownDurationCompletions = value }
+        if let value = raw["showProjectName"] as? Bool { config.showProjectName = value }
+        return config
+    }
+
+    private static func int(_ any: Any?) -> Int? {
+        switch any {
+        case let value as Int: return value
+        case let value as Double: return Int(value)
+        case let value as NSNumber: return value.intValue
+        default: return nil
+        }
+    }
+
+    private static func clamp(_ value: Int, _ lower: Int, _ upper: Int) -> Int {
+        min(max(value, lower), upper)
     }
 }

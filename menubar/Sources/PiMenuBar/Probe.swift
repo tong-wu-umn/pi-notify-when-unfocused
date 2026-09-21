@@ -54,6 +54,20 @@ enum Probe {
             }
         }
         print("  herdr snapshot: \(snapshotNote)")
+        // Inert on purpose: the probe never touches UserNotifications or asks for
+        // permission, but it does report how the native-notification policy is configured
+        // so "why is nothing arriving" is answerable without the GUI.
+        let notifications = config.notifications
+        if notifications.enabled {
+            print(
+                "  notifications: enabled — prompts:\(notifications.notifyOnPrompts ? "on" : "off") "
+                    + "idle:\(notifications.notifyOnIdle ? "on" : "off") "
+                    + "minRun:\(notifications.idleMinRunMs)ms reminders:\(notifications.reminders) "
+                    + "dedupe:\(notifications.dedupeMs)ms preciseFocus:\(notifications.preciseFocus ? "on" : "off")"
+            )
+        } else {
+            print("  notifications: off (opt in with \"notifications\": {\"enabled\": true} in ~/.pi/agent/menubar.json)")
+        }
 
         let sessions = SessionMerger.merge(MergeInput(
             registry: scan.records,

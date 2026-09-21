@@ -26,7 +26,10 @@ menu does not flicker for one-shot commands.
 **Non-goals**
 
 - Not a replacement for `notify-when-unfocused` (that stays the "you are away, here
-  is a banner" channel). This is the glanceable, always-present channel.
+  is a banner" channel). This is the glanceable, always-present channel. (PiMenuBar-owned
+  native notifications are a later, opt-in third option — see
+  [menubar-native-notifications.md](menubar-native-notifications.md) — and are meant to
+  replace the terminal-transport channel rather than run beside it.)
 - Not a second pi UI. No prompt submission, no approval, no killing sessions.
 - Not a new TUI. The pi-side extension only *publishes* state; rendering is native.
 - Not a cross-machine dashboard (herdr has SSH machines and their own sockets; out of
@@ -657,8 +660,11 @@ and VoiceOver accessible.
 1. Optional herdr `ctx=42%` display token only after proving it cannot conflict with
    managed integrations; never report agent state/title/state labels.
 2. Consume `pi.events.on("herdr:blocked")` for richer labels when available.
-3. Notification → focus via registered `pimenubar://focus?...` and
-   `terminal-notifier -open`, never shell `-execute`.
+3. ~~Notification → focus via registered `pimenubar://focus?...` and
+   `terminal-notifier -open`, never shell `-execute`.~~ Superseded by
+   [PiMenuBar-owned native notifications](menubar-native-notifications.md), which posts the
+   banner from this app and wires its actions straight to `Focuser`, so no URL scheme or
+   `terminal-notifier` is needed.
 4. Direct status-item click focuses the sole blocked session; otherwise opens the menu.
 5. Stable error/outcome display once pi exposes a documented signal.
 6. Optional non-pi agents and, separately, multiple local herdr sockets.
