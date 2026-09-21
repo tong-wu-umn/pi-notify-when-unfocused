@@ -187,6 +187,40 @@ func registerSessionMergerTests(_ t: TestRunner) {
         expectTrue(session.detailLine(now: ContextSessionMergerTests.now).contains("blocked 45s"), session.detailLine(now: ContextSessionMergerTests.now))
     }
 
+    t.test("FreshRegistryCompletionIsNotMaskedByHerdrWorking") {
+        let record = TestSupport.record([
+            "state": "idle",
+            "settledAt": ContextSessionMergerTests.now.millis - 2_000,
+            "runStartedAt": ContextSessionMergerTests.now.millis - 62_000,
+        ])
+        let sessions = ContextSessionMergerTests.merge(registry: [record], herdr: TestSupport.snapshot())
+        let session = try unwrap(sessions.first { $0.herdr?.paneId == Fixtures.piNotifyPaneId })
+        expectEqual(
+            session.state,
+            .idle,
+            "a run the registry reported as settled must not be masked by herdr's stale working"
+        )
+        expectEqual(session.settledAt, ContextSessionMergerTests.now.addingTimeInterval(-2))
+        expectTrue(session.needsAttention, "the finished run still needs to be seen")
+        let candidates = NotificationPolicy.candidates(
+            sessions: sessions,
+            acknowledgements: [:],
+            config: TestSupport.notifications()
+        )
+        expectTrue(
+            candidates.contains { $0.generation.kind == .completion },
+            "a finished run the registry reported must still become a notification candidate"
+        )
+    }
+
+    t.test("HerdrWorkingStillWinsWithoutARegistryCompletion") {
+        let record = TestSupport.record(["state": "idle", "settledAt": NSNull()])
+        let sessions = ContextSessionMergerTests.merge(registry: [record], herdr: TestSupport.snapshot())
+        let session = try unwrap(sessions.first { $0.herdr?.paneId == Fixtures.piNotifyPaneId })
+        expectEqual(session.state, .working, "without a settle there is no completion to protect")
+        expectFalse(session.needsAttention)
+    }
+
     t.test("StaleBlockedRegistryRowFollowsHerdr") {
         let record = TestSupport.record(["state": "blocked"])
         let sessions = ContextSessionMergerTests.merge(registry: [record], herdr: TestSupport.snapshot(), fresh: false)

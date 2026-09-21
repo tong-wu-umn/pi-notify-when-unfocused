@@ -535,6 +535,33 @@ human or a real desktop session:
 5. **`NotificationStatus` lives in Core** so the menu only maps an enum to a label, and
    the mapping is unit tested.
 
+**Found in real use, after the first genuinely unfocused completion was missed**
+
+Both bugs only affected *completions*; prompts were never lost, which is why the first
+round of testing looked healthy.
+
+1. **herdr's live status masked a fresh registry completion.** `SessionMerger` let a
+   fresh herdr snapshot's `working` override the registry's `idle` + `settledAt`, so a
+   finished run stayed "working" until herdr's own status update reached the app — up to
+   a 30 s snapshot gap, since the event stream re-subscribes on a 30 s read timeout. The
+   notification policy only considers `.blocked`, `.idle`, and `.done`, so it never saw a
+   candidate. A wait the registry reports now wins over herdr's `working`, exactly like
+   the existing registry-`.blocked` rule (`SessionMergerTests`).
+2. **The row-level auto-acknowledge swallowed the notification.** `SessionStore`
+   acknowledged any completed session whose *herdr* pane was selected, and the notifier
+   reads the same acknowledgement store — so a run that settled while the user was in
+   another application was marked seen before `NotificationPolicy` was ever consulted.
+   The auto-acknowledge now requires the app's own macOS focus check
+   (`FocusPolicy.preliminary == .focused`: host terminal frontmost *and* this session's
+   pane selected). This is a deliberate change to the status-row acknowledgement
+   semantics in the status-bar plan (rule 4): a lingering badge is harmless, a lost
+   "π finished" is not.
+3. Verified live after the fix, with real candidates fed through the real pipeline: a
+   completion on a herdr-selected pane while herdr still said `working` produced a
+   PiMenuBar banner; a real blocked prompt in a live pi session produced one while the
+   user was in another application; clicking it ran **Focus session** and focused the
+   pane; the reminder series posted at +20 s and +40 s and stopped at `reminders`.
+
 **Still needs a human**
 
 1. ~~Grant notification permission once (**Send test notification**) and confirm the banner
@@ -554,5 +581,6 @@ human or a real desktop session:
    PiMenuBar (single-instance lock) was left running, and `swift run` cannot post
    notifications because `UNUserNotificationCenter` needs a bundle. Verified from the live
    log instead: config reload without restart, baseline with no replay, `.denied` → `ready`
-   transition, and test delivery. Still unverified by hand: a real unfocused blocked prompt,
-   the reminder series, the banner actions, and the Focus/notification cleanup on answer.
+   transition, test delivery, an unfocused completion, the reminder series, and **Focus
+   session** on a banner. Still unverified by hand: **Mark seen** on a banner, and the
+   banner being removed when the prompt is answered or the session acknowledged.

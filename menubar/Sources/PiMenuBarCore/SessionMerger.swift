@@ -103,11 +103,26 @@ public enum SessionMerger {
         // Blocked wins from either source. Missing the one state that means "a human is
         // required" is far worse than briefly showing a stale blocked badge; herdr
         // resolves it on the next state change either way.
+        //
+        // A wait the registry has already reported wins for the same reason. The registry
+        // is written synchronously by the pi process the moment a prompt opens or a run
+        // settles, while herdr's status for that pane arrives through another daemon and
+        // then the app's subscription — so herdr can still say "working" after a run has
+        // settled. Letting that win would hide a finished run from the menu *and* from the
+        // notification policy, which only alerts on `.blocked`, `.done`, and `.idle`.
+        // The reverse contradiction cannot survive a beat: `agent_start` publishes
+        // `working` and clears `settledAt` in one synchronous write.
         let registryState = record?.sessionState
+        let registryReportsWait: Bool
+        switch registryState {
+        case .blocked: registryReportsWait = true
+        case .idle, .done: registryReportsWait = record?.settledDate != nil
+        default: registryReportsWait = false
+        }
         var state: SessionState
         if registryState == .blocked || (input.herdrFresh && herdrState == .blocked) {
             state = .blocked
-        } else if input.herdrFresh {
+        } else if input.herdrFresh, !(registryReportsWait && herdrState == .working) {
             state = herdrState
         } else {
             state = registryState ?? herdrState

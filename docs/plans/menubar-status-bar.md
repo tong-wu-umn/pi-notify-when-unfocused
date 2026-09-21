@@ -299,16 +299,26 @@ Merge rules (deterministic, unit-testable):
 1. Rows are the union of both sources, joined by session file, then pane id, then
    `pid + processStartedAt` (D3).
 2. A herdr snapshot is fresh until `2 × pollIntervalMs`. While fresh, its
-   `agent_status` wins; otherwise use registry state. Map herdr `done` → `.done` and
+   `agent_status` wins — with one exception: a wait the registry has already reported (a
+   block with `waitingSince`, or a settle with `settledAt`) wins over herdr's `working`.
+   The registry is written synchronously by the pi process the moment the event happens,
+   while herdr's status travels through a second daemon and then the app's subscription,
+   so herdr can still say `working` after a run has settled; letting that win would hide
+   the finished run from the menu *and* from the notifier. Map herdr `done` → `.done` and
    `unknown` → `.unknown`.
 3. `needsAttention` is always true for an unfocused blocked session. A herdr `done`
    row needs attention when its `state_change_seq` differs from the acknowledged
    sequence. A registry-only idle row needs attention when `settledAt > acknowledgedAt`.
    Initial idle sessions with no `settledAt` do not. An acknowledged herdr `done` row
    is presented with the idle glyph until its next state change.
-4. On successful focus, or when herdr reports the pane focused, store `now` and the
-   current `state_change_seq`. This clears completed attention but not an active
-   blocked state.
+4. On successful focus, or when the app's own macOS focus check says the user is looking
+   at that session (its host terminal is frontmost *and* herdr has that session's pane
+   selected), store `now` and the current `state_change_seq`. This clears completed
+   attention but not an active blocked state. herdr's `focused` flag alone is deliberately
+   not enough: herdr keeps the last-used pane selected while the user is in another
+   application, and acknowledging on that flag cleared the badge — and, because the
+   notifier reads the same acknowledgement, swallowed the completion notification — for
+   exactly the case the notification exists for.
 5. Detail fields (model, thinking, context usage, active tools, prompt preview, timings)
    come from the registry. `stateLabel` prefers the registry's blocked label, then
    herdr `state_labels[currentStatus]`, then `tokens.summary`. Missing values are

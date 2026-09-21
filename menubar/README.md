@@ -33,7 +33,10 @@ colour, so the item reads like the system items next to it on any wallpaper.
 
 Acknowledgement is deliberate: a `○` means "finished and you have not looked at it yet".
 Focusing the pane, clicking the row, or choosing *Mark completed seen* clears it, and a
-repeated `idle` heartbeat can never resurrect it.
+repeated `idle` heartbeat can never resurrect it. A completion clears itself only when you
+are genuinely looking at that session — its host terminal frontmost *and* its pane the
+selected one — so a badge earned while you were in another application stays until you
+come back or clear it.
 
 ---
 
