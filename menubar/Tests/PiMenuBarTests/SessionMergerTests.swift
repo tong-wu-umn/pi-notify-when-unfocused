@@ -237,6 +237,29 @@ func registerSessionMergerTests(_ t: TestRunner) {
         expectFalse(session.needsAttention)
     }
 
+    t.test("FinishedRunShowsTheFinishedGlyphUntilAcknowledged") {
+        let record = TestSupport.record([
+            "state": "idle",
+            "settledAt": ContextSessionMergerTests.now.millis - 5_000,
+            "runStartedAt": ContextSessionMergerTests.now.millis - 65_000,
+        ])
+        let unacked = try unwrap(ContextSessionMergerTests.merge(registry: [record]).first)
+        expectTrue(unacked.needsAttention, "a run the user has not seen needs attention")
+        expectEqual(unacked.displayState, .done, "a settled pi run reads as finished, not idle")
+        expectEqual(TitleFormatter.title([unacked], showIdle: false), "π 1○")
+
+        let acked = try unwrap(
+            ContextSessionMergerTests.merge(
+                registry: [record],
+                acknowledgements: [
+                    record.mergeKey: Acknowledgement(acknowledgedAt: ContextSessionMergerTests.now, herdrStateChangeSeq: nil),
+                ]
+            ).first
+        )
+        expectEqual(acked.displayState, .idle, "an acknowledged completion shows the idle glyph")
+        expectFalse(acked.needsAttention)
+    }
+
     t.test("AcknowledgedCompletionDisplaysAsIdle") {
         let snapshot = TestSupport.snapshot()
         let agent = try unwrap(snapshot.agents.first { $0.paneId == Fixtures.piNotifyPaneId })

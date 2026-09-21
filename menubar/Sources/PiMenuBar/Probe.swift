@@ -8,6 +8,7 @@ import PiMenuBarCore
 /// discovery in a non-terminal environment, the live herdr handshake, registry decoding,
 /// and the merge. `--probe --json` prints the merged sessions as JSON.
 enum Probe {
+    @MainActor
     static func run(arguments: [String]) -> Int32 {
         let config = MenuBarConfig.load()
         let registryDir = config.resolvedRegistryDir
@@ -69,13 +70,22 @@ enum Probe {
             print("  notifications: off (opt in with \"notifications\": {\"enabled\": true} in ~/.pi/agent/menubar.json)")
         }
 
-        let sessions = SessionMerger.merge(MergeInput(
+        // The same live focus check the menu and the notifier use, so `--probe` reports the
+        // badge and title the running app would show rather than herdr's pane selection.
+        let merged = SessionMerger.merge(MergeInput(
             registry: scan.records,
             herdr: snapshot,
             herdrFresh: snapshot != nil,
             acknowledgements: AcknowledgementStore.load(path: MenuBarConfig.acknowledgementsPath).entries,
             now: Date()
         ))
+        let sessions = SessionFocus.withAttention(
+            merged,
+            acknowledgements: AcknowledgementStore.load(path: MenuBarConfig.acknowledgementsPath).entries,
+            herdrSnapshot: snapshot,
+            herdrFresh: snapshot != nil,
+            defaultTerminalBundleId: config.terminalBundleId
+        ).sessions
 
         if arguments.contains("--json") {
             let encoder = JSONEncoder()

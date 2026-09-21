@@ -92,8 +92,12 @@ Actions map to the same code as the menu rows, so **Focus session** selects the 
 herdr pane and activates the terminal, and **Mark seen** clears the `○` without focusing.
 Dismissing a banner stops its reminders but deliberately does *not* mark anything seen.
 
-A banner is removed as soon as its wait is over (the prompt was answered, the completion
-was acknowledged, the session disappeared, or notifications were switched off).
+A delivered banner stays in Notification Center: only its *pending* reminders are
+cancelled when the wait is over (the prompt was answered, the completion was
+acknowledged, the session disappeared). Retracting it hid the notification whose sound
+had just brought you back to the terminal — you acknowledge a completion by simply
+returning to its pane. macOS removes the banner itself when you act on it or dismiss it;
+turning notifications off clears everything.
 
 ### Pane-precise suppression
 

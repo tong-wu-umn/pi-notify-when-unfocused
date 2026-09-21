@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import PiMenuBarCore
 
@@ -14,10 +13,6 @@ final class SessionStore {
 
     private let config: () -> MenuBarConfig
 
-    /// Frontmost macOS application. Injectable so the acknowledgement rule is testable
-    /// without a GUI session.
-    var frontmostBundleId: () -> String? = { NSWorkspace.shared.frontmostApplication?.bundleIdentifier }
-
     init(config: @escaping () -> MenuBarConfig) {
         self.config = config
         acknowledgements = AcknowledgementStore.load(path: MenuBarConfig.acknowledgementsPath)
@@ -31,21 +26,35 @@ final class SessionStore {
             acknowledgements: acknowledgements.entries,
             now: Date()
         ))
-        // Ack a completion the moment the user is *really* looking at its pane, so
+        // Attention follows the live macOS focus check, not herdr's pane selection: a run
+        // that finishes while the user is in another application has to show the `○`
+        // badge (and reach the notifier) even though herdr still calls that pane focused.
+        let refreshed = SessionFocus.withAttention(
+            merged,
+            acknowledgements: acknowledgements.entries,
+            herdrSnapshot: herdrSnapshot,
+            herdrFresh: herdrFresh,
+            defaultTerminalBundleId: config().terminalBundleId
+        )
+        // Clear a completion the moment the user is *really* looking at its pane, so
         // working in the terminal clears the badge without touching the menu.
-        //
-        // This has to be a live macOS focus check, not herdr's pane selection: herdr
-        // keeps the last-used pane selected while the user is in another application, so
-        // acking on that flag would clear the badge — and, because the notifier reads the
-        // same acknowledgement, swallow the completion notification — for exactly the
-        // case the notification exists for. Ambiguity never acknowledges: a lingering
-        // badge is harmless, a lost “π finished” is not.
-        for session in merged where isLooking(at: session, herdrSnapshot: herdrSnapshot, herdrFresh: herdrFresh) {
-            if session.state == .done || (session.state == .idle && session.settledAt != nil) {
+        for session in refreshed.sessions where refreshed.looking.contains(session.key) {
+            let finished = session.state == .done || (session.state == .idle && session.settledAt != nil)
+            // Only when it is still unseen: a recompute every few seconds must not re-ack
+            // an already acknowledged completion and repaint the menu each time.
+            let seen = AttentionRules.needsAttention(
+                state: session.state,
+                focused: false,
+                settledAt: session.settledAt,
+                herdrStateChangeSeq: session.herdr?.stateChangeSeq,
+                acknowledgement: acknowledgements[session.key]
+            ) == false
+            if finished, !seen {
+                Log.shared.debug("completion for \(session.label) cleared while looking at its pane")
                 acknowledge(session, persistImmediately: false)
             }
         }
-        sessions = merged
+        sessions = refreshed.sessions
         onChange?()
     }
 
@@ -53,20 +62,11 @@ final class SessionStore {
         sessions.first { $0.key == key }
     }
 
-    /// True only when the session's host terminal is frontmost *and* this session's pane
-    /// is the selected one. Shares `FocusPolicy` with the notifier so the menu and a
-    /// banner can never disagree about what “the user is looking at it” means.
-    private func isLooking(at session: Session, herdrSnapshot: HerdrSnapshot?, herdrFresh: Bool) -> Bool {
-        FocusPolicy.preliminary(
-            frontmostBundleId: frontmostBundleId(),
-            expectedBundleId: session.terminalBundleId ?? config().terminalBundleId,
-            herdrFresh: herdrFresh,
-            selectedPaneId: herdrSnapshot?.focusedPaneId,
-            sessionPaneId: session.herdr?.paneId
-        ) == .focused
-    }
-
     func acknowledge(_ session: Session, persistImmediately: Bool = true) {
+        // An acknowledgement both clears the badge and retires the wait, so a banner the
+        // notifier already posted is removed right after. Worth a line: it is the most
+        // common reason a delivered banner disappears before the user looks at it.
+        Log.shared.debug("acknowledged \(session.label) (\(session.state.rawValue)")
         acknowledgements.acknowledge(
             key: session.key,
             at: Date(),

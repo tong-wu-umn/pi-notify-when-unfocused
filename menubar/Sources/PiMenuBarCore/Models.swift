@@ -188,8 +188,16 @@ public struct Session: Sendable, Equatable, Identifiable {
     /// as idle until that session's next state change, so the badge means "new", not
     /// "ever finished".
     public var displayState: SessionState {
-        if state == .done, !needsAttention { return .idle }
-        return state
+        switch state {
+        case .done, .idle:
+            // A settled run that has not been acknowledged is presented as *finished*.
+            // The registry publishes `idle` the moment a pi run ends (herdr only says
+            // `done` for other agent integrations), so requiring `.done` here hid the
+            // `○` for the one state pi ever publishes: a finished run read as idle.
+            return needsAttention ? .done : .idle
+        default:
+            return state
+        }
     }
 
     public var contextPercent: Int? {

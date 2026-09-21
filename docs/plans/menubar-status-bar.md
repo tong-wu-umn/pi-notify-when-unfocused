@@ -306,11 +306,17 @@ Merge rules (deterministic, unit-testable):
    so herdr can still say `working` after a run has settled; letting that win would hide
    the finished run from the menu *and* from the notifier. Map herdr `done` → `.done` and
    `unknown` → `.unknown`.
-3. `needsAttention` is always true for an unfocused blocked session. A herdr `done`
-   row needs attention when its `state_change_seq` differs from the acknowledged
-   sequence. A registry-only idle row needs attention when `settledAt > acknowledgedAt`.
-   Initial idle sessions with no `settledAt` do not. An acknowledged herdr `done` row
-   is presented with the idle glyph until its next state change.
+3. `needsAttention` is always true for a session the user is not looking at: a blocked
+   row, or a settled run (`settledAt` newer than `acknowledgedAt`). "Looking at" means the
+   live macOS check (host terminal frontmost *and* this session's pane selected), not
+   herdr's `focused` flag — that flag keeps pointing at the pane the user last used while
+   they are in another application, so using it for attention hid the `○` for exactly the
+   case the badge exists for. A settled run is *presented* as finished (`○`) until it is
+   acknowledged; the registry publishes `idle` when a pi run ends, so presentation cannot
+   require herdr's `done`. A herdr `done` row needs attention when its `state_change_seq`
+   differs from the acknowledged sequence. Initial idle sessions with no `settledAt` do
+   not. An acknowledged herdr `done` row is presented with the idle glyph until its next
+   state change.
 4. On successful focus, or when the app's own macOS focus check says the user is looking
    at that session (its host terminal is frontmost *and* herdr has that session's pane
    selected), store `now` and the current `state_change_seq`. This clears completed

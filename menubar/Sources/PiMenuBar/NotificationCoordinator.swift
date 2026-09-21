@@ -30,6 +30,7 @@ final class NotificationCoordinator: NSObject {
     private var lastConfig = NotificationConfig()
     private var center: UNUserNotificationCenter?
     private var lastStatusCheck: Date?
+    private var lastWaitingKeys: Set<String> = []
     /// Re-reading the authorization status more often than this is pointless and costs a
     /// call into the notification daemon on every session event.
     private let statusCheckInterval: TimeInterval = 30
@@ -100,6 +101,7 @@ final class NotificationCoordinator: NSObject {
             acknowledgements: store.acknowledgements.entries,
             config: notifications
         )
+        logCandidateChange()
         active = [:]  // rebuilt below; duplicate keys must not be able to crash the app
         for candidate in candidates {
             active[candidate.generation] = candidate.session
@@ -112,6 +114,12 @@ final class NotificationCoordinator: NSObject {
         for action in outcome.actions {
             switch action {
             case let .cancel(generation):
+                // Worth a line: a wait that ends on its own (answered prompt, acknowledged
+                // completion) stops the reminders and is otherwise invisible in the log.
+                let waiting = candidates.isEmpty
+                    ? "none"
+                    : candidates.map(\.generation.generationKey).joined(separator: ", ")
+                Log.shared.debug("notifications: cancelling \(generation.generationKey); waiting now: \(waiting)")
                 removeNotification(for: generation)
             case let .attempt(attempt):
                 Task { await deliver(attempt) }
@@ -196,13 +204,19 @@ final class NotificationCoordinator: NSObject {
         )
     }
 
-    /// Removes a banner whose wait is over: answered prompt, acknowledged completion,
-    /// session gone, or notifications switched off.
+    /// Stops a wait: cancel the pending reminders, but leave a banner that was already
+    /// delivered in Notification Center.
+    ///
+    /// Retracting it looked tidy and was actively harmful. The app acknowledges a
+    /// completion the moment the user is back at its pane — which is exactly when they go
+    /// looking for the notification whose sound brought them back — so the banner, and the
+    /// route its Focus session action needs, disappeared before it could be read. macOS
+    /// removes the banner itself when the user acts on it or dismisses it; that is the
+    /// only cleanup needed.
     private func removeNotification(for generation: AttentionGeneration) {
-        guard let route = routes.remove(generation: generation) else { return }
-        routes.write(to: routesPath)
-        guard let center = centerIfSupported() else { return }
-        center.removeDeliveredNotifications(withIdentifiers: [route.requestId])
+        guard let route = routes.route(for: generation),
+              let center = centerIfSupported()
+        else { return }
         center.removePendingNotificationRequests(withIdentifiers: [route.requestId])
     }
 
@@ -217,6 +231,26 @@ final class NotificationCoordinator: NSObject {
     }
 
     // MARK: - Deadlines
+
+    /// Diffs the wait set for the log. A wait appearing or disappearing is what raises or
+    /// stops a banner, so it is worth one debug line per change; the merged state of every
+    /// row is included because "why did this wait disappear" is otherwise unanswerable
+    /// after the fact.
+    private func logCandidateChange() {
+        let waiting = Set(candidates.map(\.generation.generationKey))
+        guard waiting != lastWaitingKeys else { return }
+        lastWaitingKeys = waiting
+        let rows = store.sessions.map { session in
+            "\(session.label):\(session.state.rawValue)"
+                + (session.simulated ? ":simulated" : "")
+                + (session.settledAt.map { ":settled " + String(Int($0.timeIntervalSinceNow.rounded())) + "s" } ?? "")
+                + (session.waitingSince.map { ":waiting " + String(Int($0.timeIntervalSinceNow.rounded())) + "s" } ?? "")
+                + (store.acknowledgements.entries[session.key] != nil ? ":acked" : "")
+        }
+        Log.shared.debug(
+            "notifications: waits \(waiting.isEmpty ? "none" : waiting.sorted().joined(separator: ", ")) | sessions [\(rows.joined(separator: "; "))]"
+        )
+    }
 
     private func reschedule() {
         cancelTimer()

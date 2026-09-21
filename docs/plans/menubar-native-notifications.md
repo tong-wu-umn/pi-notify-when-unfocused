@@ -246,9 +246,13 @@ For each blocked generation, the coordinator keeps one in-memory delivery state:
    reminder may still deliver. This matches the root extension's prompt-after-idle
    behaviour without losing a genuinely still-blocked prompt.
 5. A prompt ending, session disappearance, next agent run, completion acknowledgement,
-   or an explicit Focus/Mark-seen action cancels the matching timer and removes its
-   pending/delivered request. This prevents stale Notification Center cards claiming a
-   solved prompt is still open.
+   or an explicit Focus/Mark-seen action cancels the matching timer and its *pending*
+   reminders. A banner that was already delivered stays in Notification Center: the app
+   acknowledges a completion the moment the user is back at its pane, which is exactly
+   when they go looking for the notification whose sound brought them back, and retracting
+   it hid the very thing the sound announced. macOS removes the banner itself when the
+   user acts on it or dismisses it. The route is kept so the banner's actions keep
+   working until the seven-day prune.
 6. Manual notification dismissal cancels further reminders for that generation but does
    **not** acknowledge the PiMenuBar completion badge. Dismissing a banner is not proof
    the user inspected the session.
@@ -329,8 +333,9 @@ implementation. Log a rate-limited diagnostic only, never a CWD or prompt string
 ```
 
 The UUID, not the session path/key, is the sole value in `content.userInfo`. Routes are
-atomically written and pruned after seven days; they are removed sooner on action,
-resolution, or delivered-notification cleanup.
+atomically written and pruned after seven days; they are removed sooner only on an
+explicit dismissal action, never because a wait ended (a delivered banner may still be
+needed to explain the sound the user just heard).
 
 Action handling:
 
@@ -561,6 +566,36 @@ round of testing looked healthy.
    PiMenuBar banner; a real blocked prompt in a live pi session produced one while the
    user was in another application; clicking it ran **Focus session** and focused the
    pane; the reminder series posted at +20 s and +40 s and stopped at `reminders`.
+
+**Found in real use, round 2: "I hear the sound but see no notification"**
+
+The sound turned out to be herdr's own `Done` cue (herdr plays its own `Request`/`Done`
+sounds), which PiMenuBar neither controls nor mirrors — so the report really meant "the
+run finished and PiMenuBar showed nothing". Three defects compounded that:
+
+1. **A settled pi run was never presented as finished.** `Session.displayState` only
+   reported `.done` for herdr's `done` status, which the pi integration never sends — it
+   reports `idle` the moment a run ends. So a registry completion with
+   `needsAttention == true` still rendered as `·`, and the `○` never appeared in the
+   title, the tooltip, or a row. Presentation now follows attention: settled and unseen is
+   finished (`FinishedRunShowsTheFinishedGlyphUntilAcknowledged`).
+2. **Attention used herdr's pane selection as "the user is looking".** That flag keeps
+   pointing at the last-used pane while the user is in another application, so a
+   completion on that pane was never attention — no `○`, and (before the previous fix) no
+   notification either. The badge now uses the same live macOS focus check as the
+   notifier, factored into `SessionFocus` and shared with `--probe`, so the menu, the
+   banner, and the probe cannot disagree (`SessionFocus.withAttention`).
+3. **A delivered banner was retracted as soon as the wait ended** — including the
+   acknowledgement that fires when the user comes back to the pane, i.e. exactly when they
+   would look for the notification whose sound brought them back. `removeNotification` now
+   cancels pending reminders only and leaves the banner (and its route, so **Focus
+   session** still works) in Notification Center; macOS removes it when the user acts on
+   it or dismisses it. Verified: the auto-ack fires, the wait is cancelled, and no
+   `Removed banner notification` reaches the notification daemon.
+
+Also fixed while reproducing: the auto-acknowledge no longer repeats on every recompute
+for an already-acknowledged completion (it repainted the menu every few seconds while a
+finished session stayed selected).
 
 **Still needs a human**
 
