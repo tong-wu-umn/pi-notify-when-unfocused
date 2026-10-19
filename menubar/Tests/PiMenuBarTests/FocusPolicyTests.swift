@@ -99,5 +99,24 @@ func registerFocusPolicyTests(_ t: TestRunner) {
             titleMarkers: ["π"]
         )
         expectTrue(verdict.focused, "a broken probe must cost a missed banner, not interrupt the wrong pane")
+        expectFalse(verdict.confident, "a failed probe must not end a reminder series")
+    }
+
+    t.test("OnlyPositiveEvidenceIsConfident") {
+        let matched = FocusPolicy.terminalVerdict(
+            evidence: .pane(cwd: "/tmp/project", title: "π - project"),
+            sessionCwd: "/tmp/project",
+            titleMarkers: ["π"]
+        )
+        expectTrue(matched.focused)
+        expectTrue(matched.confident, "a matching probe proves the user is looking")
+
+        let differentPane = FocusPolicy.terminalVerdict(
+            evidence: .pane(cwd: "/tmp/other", title: "π - other"),
+            sessionCwd: "/tmp/project",
+            titleMarkers: ["π"]
+        )
+        expectFalse(differentPane.focused)
+        expectTrue(differentPane.confident)
     }
 }

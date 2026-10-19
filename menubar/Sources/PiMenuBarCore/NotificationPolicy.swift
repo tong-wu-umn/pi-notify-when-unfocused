@@ -74,7 +74,11 @@ public struct Candidate: Sendable, Equatable {
 ///
 ///  - the first `reconcile` after launch — or after notifications are re-enabled — only
 ///    establishes a baseline, so old blocked/done rows never replay as banners;
-///  - a generation earns one initial attempt plus at most `reminders` reminder attempts;
+///  - an open *prompt* earns one initial attempt plus at most `reminders` reminders;
+///    a *completion* earns exactly one attempt (it is a single event, and repeating
+///    "π finished" three times is noise, not a nudge);
+///  - an attempt that observed the user looking at the session ends the series: a
+///    reminder only helps someone who is not already at the terminal;
 ///  - an attempt is *reserved* (`pending`) until the app reports its outcome, so a slow
 ///    focus probe can never let the same generation be attempted twice.
 public struct NotificationPolicy: Sendable {
@@ -220,12 +224,18 @@ public struct NotificationPolicy: Sendable {
                 states[candidate.generation] = state
                 continue
             }
-            // Near-duplicates wait for the reminder interval instead of stacking up.
-            // The initial slot is consumed either way, so a deduped prompt can still earn
-            // its normal reminders while it stays open.
+            // Near-duplicates never stack up. A prompt keeps its reminder slot (the
+            // initial one is consumed, so its first reminder still says "still waiting");
+            // a completion is one-shot, so it is retried as an initial alert once the
+            // dedupe window has passed instead of being dropped.
             if let last = lastReservedAt, now.timeIntervalSince(last) * 1000 < Double(config.dedupeMs) {
-                state.initialAttempted = true
-                state.nextCheckAt = reminderDeadline(after: now, remindersUsed: state.remindersUsed)
+                if candidate.generation.kind == .prompt {
+                    state.initialAttempted = true
+                    state.nextCheckAt = reminderDeadline(for: .prompt, after: now, remindersUsed: state.remindersUsed)
+                } else {
+                    let remaining = Double(config.dedupeMs) / 1000 - now.timeIntervalSince(last)
+                    state.nextCheckAt = now.addingTimeInterval(max(0.05, remaining))
+                }
                 states[candidate.generation] = state
                 continue
             }
@@ -243,7 +253,11 @@ public struct NotificationPolicy: Sendable {
             state.pending = attempt
             state.initialAttempted = true
             if isReminder { state.remindersUsed += 1 }
-            state.nextCheckAt = reminderDeadline(after: now, remindersUsed: state.remindersUsed)
+            state.nextCheckAt = reminderDeadline(
+                for: candidate.generation.kind,
+                after: now,
+                remindersUsed: state.remindersUsed
+            )
             states[candidate.generation] = state
             lastReservedAt = now
             outcome.actions.append(.attempt(attempt))
@@ -262,14 +276,29 @@ public struct NotificationPolicy: Sendable {
     }
 
     /// Reports what actually happened to a reserved attempt so the generation can be
-    /// rescheduled. `delivered: false` covers "the user was looking at it", "permission
-    /// unavailable", and "another alert won the dedupe window".
-    public mutating func recordAttempt(_ generation: AttentionGeneration, delivered: Bool, now: Date) {
+    /// rescheduled. `delivered: false` covers "permission unavailable" and "another alert
+    /// won the dedupe window".
+    ///
+    /// `userIsLooking` is positive evidence that the user is at *this* session. That ends
+    /// the series for the wait: the prompt is already on screen, so every further reminder
+    /// would be a repeat of something the user has seen. This is deliberately stronger
+    /// than a plain non-delivery — a focus probe that merely failed stays quiet for now but
+    /// keeps its remaining reminders.
+    public mutating func recordAttempt(
+        _ generation: AttentionGeneration,
+        delivered: Bool,
+        userIsLooking: Bool = false,
+        now: Date
+    ) {
         guard var state = states[generation] else { return }
         state.pending = nil
         if delivered {
             lastDeliveryAt = now
             lastReservedAt = now
+        }
+        if userIsLooking {
+            state.silent = true
+            state.nextCheckAt = nil
         }
         states[generation] = state
     }
@@ -368,8 +397,12 @@ public struct NotificationPolicy: Sendable {
         return "session:\(session.key)"
     }
 
-    private func reminderDeadline(after now: Date, remindersUsed: Int) -> Date? {
-        guard remindersUsed < config.reminders else { return nil }
+    /// Only a still-open prompt earns reminders. A completion is one event: the user
+    /// either noticed the banner or they did not, and repeating an identical "π finished"
+    /// every reminder interval is exactly the "same reminder again" noise this return type
+    /// exists to avoid (it also reused the prompt wording "still needs your input").
+    private func reminderDeadline(for kind: AttentionKind, after now: Date, remindersUsed: Int) -> Date? {
+        guard kind == .prompt, remindersUsed < config.reminders else { return nil }
         return now.addingTimeInterval(Double(config.reminderIntervalMs) / 1000)
     }
 }

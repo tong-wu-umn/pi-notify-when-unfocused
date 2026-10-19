@@ -20,7 +20,7 @@ Windows notifications are **pane-aware**: if you have several pi sessions in sev
 | `ui_prompt_start` | Any blocking pi dialog is on screen: approve/reject, select, input, editor, custom. Covers permission extensions such as `pi-permission-system`. | on |
 | `agent_settled` | A run finished and pi is idle, waiting for your next message. | on, only for runs longer than 15s |
 
-While a dialog stays open, a couple of reminders are sent (default: 2 more, 20s apart), and near-duplicate notifications are suppressed.
+While a dialog stays open, a couple of reminders are sent (default: 2 more, 20s apart), and near-duplicate notifications are suppressed. The reminder series ends as soon as you are back at that session's pane — looking at the prompt counts as having seen it — and a finished run notifies once, never as a repeating reminder.
 
 ## Related
 
@@ -93,7 +93,7 @@ Optional file at `~/.pi/agent/notify-when-unfocused.json` (defaults are used whe
 | `notifyOnPrompts` | Notify for blocking dialogs |
 | `notifyOnIdle` | Notify when a run settles and pi waits for your next message |
 | `idleMinRunMs` | Don't notify for runs shorter than this |
-| `reminders` / `reminderIntervalMs` | Extra nudges while still waiting |
+| `reminders` / `reminderIntervalMs` | Extra nudges for a prompt that stays open (never for a finished run) |
 | `dedupeMs` | Suppress a second notification this soon after the first |
 | `terminalApps` | Frontmost app names that count as "the terminal" |
 | `titleMarkers` | Substrings pi puts in its own terminal title, used to identify this pane |

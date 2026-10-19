@@ -110,17 +110,82 @@ func registerNotificationPolicyTests(_ t: TestRunner) {
         expectNil(policy.nextDeadline)
     }
 
-    t.test("AFocusedInitialAttemptStillEarnsItsReminders") {
+    t.test("AFocusedAttemptEndsTheSeriesInsteadOfRearming") {
         let config = TestSupport.notifications()
         var policy = PolicyFixture.primedPolicy(config)
         let waiting = PolicyFixture.blocked(now)
         let candidates = PolicyFixture.candidates([waiting], config)
 
         let attempt = try PolicyFixture.onlyAttempt(policy.reconcile(candidates: candidates, now: now))
+        policy.recordAttempt(attempt.generation, delivered: false, userIsLooking: true, now: now)
+
+        expectNil(policy.nextDeadline, "a prompt the user is already looking at needs no reminders")
+        let after = policy.reconcile(candidates: candidates, now: now.addingTimeInterval(20))
+        expectEqual(after.actions.count, 0, "the same reminder must not come back once the user looked")
+    }
+
+    t.test("AnUncertainFocusMissStillKeepsItsReminders") {
+        let config = TestSupport.notifications()
+        var policy = PolicyFixture.primedPolicy(config)
+        let candidates = PolicyFixture.candidates([PolicyFixture.blocked(now)], config)
+
+        let attempt = try PolicyFixture.onlyAttempt(policy.reconcile(candidates: candidates, now: now))
+        // A failed probe also reports "not delivered", but without positive evidence the
+        // wait keeps its remaining reminders (the user may simply have been away).
         policy.recordAttempt(attempt.generation, delivered: false, now: now)
 
         let reminder = try PolicyFixture.onlyAttempt(policy.reconcile(candidates: candidates, now: now.addingTimeInterval(20)))
-        expectEqual(reminder.isReminder, true, "the user may have walked away while the same prompt is open")
+        expectEqual(reminder.isReminder, true)
+    }
+
+    t.test("ACompletionGetsOneBannerAndNeverAReminder") {
+        let config = TestSupport.notifications(reminders: 2)
+        var policy = PolicyFixture.primedPolicy(config)
+        let settled = now.addingTimeInterval(-60)
+        let finished = TestSupport.session(
+            key: "session-a",
+            state: .idle,
+            settledAt: settled,
+            runStartedAt: settled.addingTimeInterval(-600)
+        )
+        let candidates = PolicyFixture.candidates([finished], config)
+
+        let attempt = try PolicyFixture.onlyAttempt(policy.reconcile(candidates: candidates, now: now))
+        expectEqual(attempt.isReminder, false)
+        expectEqual(attempt.generation.kind, .completion)
+        expectEqual(attempt.content.title, NotificationContentBuilder.completionTitle)
+        policy.recordAttempt(attempt.generation, delivered: true, now: now)
+
+        expectNil(policy.nextDeadline, "a finished run has nothing left to remind about")
+        for offset in [20.0, 40.0, 60.0] {
+            let later = policy.reconcile(candidates: candidates, now: now.addingTimeInterval(offset))
+            expectEqual(later.actions.count, 0, "a completion must not repeat \"still needs your input\"")
+        }
+    }
+
+    t.test("ADedupeSuppressedCompletionRetriesAsAnInitialAlert") {
+        let config = TestSupport.notifications(dedupeMs: 10_000)
+        var policy = PolicyFixture.primedPolicy(config)
+        let prompt = PolicyFixture.blocked(now, key: "session-a")
+        let settled = now.addingTimeInterval(-60)
+        let finished = TestSupport.session(
+            key: "session-b",
+            state: .idle,
+            settledAt: settled,
+            runStartedAt: settled.addingTimeInterval(-600)
+        )
+        let candidates = PolicyFixture.candidates([prompt, finished], config)
+
+        let first = try PolicyFixture.onlyAttempt(policy.reconcile(candidates: candidates, now: now))
+        expectEqual(first.generation.kind, .prompt, "the prompt wins the alert slot")
+        policy.recordAttempt(first.generation, delivered: true, now: now)
+
+        // The completion was deduped for this pass; it must reappear as an initial alert
+        // (not a reminder, and not silence) once the dedupe window ends.
+        let retry = try PolicyFixture.onlyAttempt(policy.reconcile(candidates: candidates, now: now.addingTimeInterval(10)))
+        expectEqual(retry.generation.kind, .completion)
+        expectEqual(retry.isReminder, false)
+        expectEqual(retry.content.title, NotificationContentBuilder.completionTitle)
     }
 
     t.test("ANewPromptIsANewGenerationWhileTheOldOneIsCancelled") {

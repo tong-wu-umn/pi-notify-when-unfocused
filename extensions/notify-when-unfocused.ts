@@ -315,6 +315,8 @@ interface WaitingSpan {
 	timer?: ReturnType<typeof setTimeout>;
 }
 
+type NudgeOutcome = "gone" | "focused" | "ok";
+
 export default function (pi: ExtensionAPI) {
 	const cfg = loadConfig();
 	if (!cfg.enabled) return;
@@ -331,12 +333,15 @@ export default function (pi: ExtensionAPI) {
 		span = undefined;
 	}
 
-	async function nudge(current: WaitingSpan, isReminder: boolean): Promise<void> {
+	async function nudge(current: WaitingSpan, isReminder: boolean): Promise<NudgeOutcome> {
 		const focus = await checkFocus(cfg);
-		if (span?.id !== current.id || focus.focused) return;
+		if (span?.id !== current.id) return "gone";
+		// Looking at the session means the wait is seen. Report it so the caller can end
+		// the series instead of skipping just this nudge and re-arming another one.
+		if (focus.focused) return "focused";
 
 		const now = Date.now();
-		if (!isReminder && now - lastNotifiedAt < cfg.dedupeMs) return; // e.g. prompt right after an idle nudge
+		if (!isReminder && now - lastNotifiedAt < cfg.dedupeMs) return "ok"; // e.g. prompt right after an idle nudge
 		lastNotifiedAt = now;
 
 		const body = isReminder ? `${current.body} (still waiting)` : current.body;
@@ -344,6 +349,7 @@ export default function (pi: ExtensionAPI) {
 		if (process.env.PI_NUDGE_DEBUG === "1") {
 			process.stderr.write(`[notify-when-unfocused] ${transport}: ${current.title} — ${body} (${focus.reason})\n`);
 		}
+		return "ok";
 	}
 
 	function scheduleReminder(current: WaitingSpan): void {
@@ -352,29 +358,45 @@ export default function (pi: ExtensionAPI) {
 			current.timer = undefined;
 			if (span?.id !== current.id) return;
 			void (async () => {
-				await nudge(current, true);
-				if (span?.id === current.id) {
-					current.remindersLeft -= 1;
-					scheduleReminder(current);
+				const outcome = await nudge(current, true);
+				if (span?.id !== current.id) return;
+				if (outcome === "focused") {
+					// The user is at the prompt: stop reminding about a wait they have seen,
+					// even if they walk away before the next interval.
+					endSpan();
+					return;
 				}
+				current.remindersLeft -= 1;
+				scheduleReminder(current);
 			})();
 		}, cfg.reminderIntervalMs);
 		// Don't hold the process open just for a reminder.
 		(current.timer as unknown as { unref?: () => void }).unref?.();
 	}
 
-	function beginSpan(title: string, body: string): void {
+	/**
+	 * `reminders` is 0 for a finished run: a completion is a single event, and repeating
+	 * "π is waiting for you" every reminder interval is the same notification again, not a
+	 * nudge. Only an open prompt stays waiting long enough to earn reminders.
+	 */
+	function beginSpan(title: string, body: string, reminders: number = Math.max(0, cfg.reminders)): void {
 		endSpan();
 		const current: WaitingSpan = {
 			id: ++spanCounter,
 			title,
 			body,
-			remindersLeft: Math.max(0, cfg.reminders),
+			remindersLeft: reminders,
 		};
 		span = current;
 		void (async () => {
-			await nudge(current, false);
-			if (span?.id === current.id) scheduleReminder(current);
+			const outcome = await nudge(current, false);
+			if (span?.id !== current.id) return;
+			if (outcome === "focused") {
+				// The prompt is already on screen; there is nothing to remind the user about.
+				endSpan();
+				return;
+			}
+			scheduleReminder(current);
 		})();
 	}
 
@@ -411,7 +433,7 @@ export default function (pi: ExtensionAPI) {
 		// extension was reloaded mid-run) — notify, but skip the duration filter.
 		if (started !== 0 && Date.now() - started < cfg.idleMinRunMs) return;
 		const where = path.basename(process.cwd()) || process.cwd();
-		beginSpan("π is waiting for you", `Finished in ${where} — switch back to Ghostty`);
+		beginSpan("π is waiting for you", `Finished in ${where} — switch back to Ghostty`, 0);
 	});
 
 	pi.registerCommand("nudge", {

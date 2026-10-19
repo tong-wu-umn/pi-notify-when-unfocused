@@ -100,6 +100,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         wire()
+        // A wait is "seen" the moment the user is back at its pane, not only at the next
+        // reminder deadline. SessionStore reports the panes herdr positively selects;
+        // activation adds the same full probe for panes herdr cannot identify (a stale
+        // snapshot, a registry-only session).
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(applicationActivated(_:)),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
         notifications.start()
         registry.start()
         client.start()
@@ -108,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         store?.persist()
         client?.stop()
         registry?.stop()
@@ -133,6 +144,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.statusItem.scheduleRender()
             // Every merged change is a chance for a wait to begin, end, or be answered.
             self.notifications.reconcile()
+        }
+        store.onLookingSessions = { [weak self] keys in
+            self?.notifications.observeLookingSessions(keys)
         }
         notifications.onChange = { [weak self] in self?.statusItem.scheduleRender() }
         notifications.onFocusSession = { [weak self] session in self?.focus(session) }
@@ -162,6 +176,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in await self.notifications.sendTestNotification() }
         }
         statusItem.onOpenNotificationSettings = { Self.openNotificationSettings() }
+    }
+
+    @objc private func applicationActivated(_ notification: Notification) {
+        Task { @MainActor in await notifications.observeFocus() }
     }
 
     /// Focus a session and acknowledge it exactly like clicking its row: the menu and a

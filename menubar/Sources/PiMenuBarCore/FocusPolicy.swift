@@ -4,14 +4,23 @@ import Foundation
 public struct FocusVerdict: Sendable, Equatable {
     public let focused: Bool
     public let reason: String
+    /// True when the verdict rests on positive evidence (a frontmost-app match plus a
+    /// pane decision, or an actual probe result) rather than the fail-open "assume
+    /// focused" fallback. Only a confident focus may end a reminder series: a transient
+    /// probe failure must cost one banner, never every remaining nudge.
+    public let confident: Bool
 
-    public init(focused: Bool, reason: String) {
+    public init(focused: Bool, reason: String, confident: Bool = false) {
         self.focused = focused
         self.reason = reason
+        self.confident = confident
     }
 
-    public static func focused(_ reason: String) -> FocusVerdict { FocusVerdict(focused: true, reason: reason) }
-    public static func unfocused(_ reason: String) -> FocusVerdict { FocusVerdict(focused: false, reason: reason) }
+    /// The user is looking at this session, as far as we can prove.
+    public static func focused(_ reason: String) -> FocusVerdict { FocusVerdict(focused: true, reason: reason, confident: true) }
+    /// Fail open: stay quiet, but remember that nobody proved the user is here.
+    public static func assumedFocused(_ reason: String) -> FocusVerdict { FocusVerdict(focused: true, reason: reason, confident: false) }
+    public static func unfocused(_ reason: String) -> FocusVerdict { FocusVerdict(focused: false, reason: reason, confident: true) }
 }
 
 /// What the platform must still find out before a verdict is possible.
@@ -68,7 +77,7 @@ public enum FocusPolicy {
     ) -> FocusVerdict {
         switch evidence {
         case .unavailable:
-            return .focused("the focused terminal pane could not be identified")
+            return .assumedFocused("the focused terminal pane could not be identified")
         case let .pane(cwd, title):
             let sameDirectory = samePath(cwd, sessionCwd)
             let isPi = titleMarkers.contains { !$0.isEmpty && title.contains($0) }

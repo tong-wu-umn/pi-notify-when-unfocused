@@ -64,16 +64,16 @@ final class FocusResolver {
         case .unfocused:
             return .unfocused("another pane or application is in front")
         case .unknownAssumeFocused:
-            return .focused("the frontmost application could not be identified")
+            return .assumedFocused("the frontmost application could not be identified")
         case .needsTerminalProbe:
             guard preciseFocus else {
-                return .focused("the host terminal is frontmost (preciseFocus is off)")
+                return .assumedFocused("the host terminal is frontmost (preciseFocus is off)")
             }
             guard expected == Self.ghosttyBundleId else {
-                return .focused("the host terminal is frontmost and the pane cannot be probed")
+                return .assumedFocused("the host terminal is frontmost and the pane cannot be probed")
             }
             if let until = probeBackoffUntil, Date() < until {
-                return .focused("the terminal pane probe is backing off after a failure")
+                return .assumedFocused("the terminal pane probe is backing off after a failure")
             }
             let evidence = await probeTerminal()
             if case .unavailable = evidence {

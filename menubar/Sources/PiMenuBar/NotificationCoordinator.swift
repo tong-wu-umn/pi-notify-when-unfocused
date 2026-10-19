@@ -171,7 +171,18 @@ final class NotificationCoordinator: NSObject {
 
         if verdict.focused {
             Log.shared.debug("notifications: quiet \(attempt.generation.kind.rawValue) for \(session.label) — \(verdict.reason)")
-            policy.recordAttempt(attempt.generation, delivered: false, now: Date())
+            // The user is at the session, so the wait is seen. Ending the series here is
+            // what stops "the same reminder" repeating after the user walks back to the
+            // terminal but leaves again without answering: the next reminder deadline
+            // would otherwise re-resolve focus and post once they are away again.
+            // A fail-open "assumed focused" only quiets this attempt; it is not proof
+            // that anybody saw the prompt.
+            policy.recordAttempt(
+                attempt.generation,
+                delivered: false,
+                userIsLooking: verdict.confident,
+                now: Date()
+            )
         } else {
             post(attempt, session: session, verdict: verdict)
             policy.recordAttempt(attempt.generation, delivered: true, now: Date())
@@ -228,6 +239,58 @@ final class NotificationCoordinator: NSObject {
         guard let center = centerIfSupported() else { return }
         center.removeAllDeliveredNotifications()
         center.removeAllPendingNotificationRequests()
+    }
+
+    // MARK: - Focus observations
+
+    /// Called when any application becomes frontmost. Reminders only make sense for a
+    /// user who is *not* at the session, so the moment the user comes back to a waiting
+    /// pane the series is over — even if they leave again before the next reminder
+    /// deadline.
+    ///
+    /// Sampling only at delivery time is not enough: with a 20 s reminder interval, a
+    /// user who glances at the prompt and switches away earns the next reminder a second
+    /// later, which reads as "the same reminder again". This runs on app activation
+    /// (cheap when another app is frontmost: the per-session preliminary check rejects it
+    /// without any subprocess) and on terminal activation it performs the same full probe
+    /// as delivery.
+    func observeFocus() async {
+        let notifications = config().notifications
+        guard notifications.enabled, !active.isEmpty else { return }
+
+        // Snapshot: `reconcile` can run while a probe awaits, and it replaces `active`.
+        let current = active
+        for (generation, session) in current {
+            let verdict = await resolver.resolve(
+                session: session,
+                defaultTerminalBundleId: config().terminalBundleId,
+                preciseFocus: notifications.preciseFocus,
+                herdrFresh: client.snapshotIsFresh,
+                selectedPaneId: client.snapshot?.focusedPaneId
+            )
+            // Revalidate after the await: the wait may have ended, the session been
+            // replaced, or notifications disabled while the probe ran.
+            guard active[generation] != nil, config().notifications.enabled else { continue }
+            guard verdict.focused, verdict.confident else { continue }
+            Log.shared.debug("notifications: \(generation.kind.rawValue) for \(session.label) is being watched — \(verdict.reason)")
+            policy.recordAttempt(generation, delivered: false, userIsLooking: true, now: Date())
+        }
+        reschedule()
+    }
+
+    /// The store's cheap focus check positively identified these sessions as on screen
+    /// (host terminal frontmost plus a matching herdr pane selection). That is proof the
+    /// user is looking, so their reminder series end. herdr learns about the pane click
+    /// directly, which makes this both earlier and more reliable than waiting for the
+    /// next reminder deadline to probe again.
+    func observeLookingSessions(_ keys: Set<String>) {
+        guard !keys.isEmpty, config().notifications.enabled else { return }
+        var changed = false
+        for (generation, session) in active where keys.contains(session.key) {
+            policy.recordAttempt(generation, delivered: false, userIsLooking: true, now: Date())
+            changed = true
+        }
+        if changed { reschedule() }
     }
 
     // MARK: - Deadlines

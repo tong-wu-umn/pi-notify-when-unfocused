@@ -597,6 +597,36 @@ Also fixed while reproducing: the auto-acknowledge no longer repeats on every re
 for an already-acknowledged completion (it repainted the menu every few seconds while a
 finished session stayed selected).
 
+**Found in real use, round 3: "the same reminder pops up multiple times"**
+
+The live log made it unambiguous: 40 of 68 posted banners were `completion reminder`. Two
+defects compounded:
+
+1. **Reminders were armed for every generation, including completions.** The documented
+   meaning of `reminders` is "extra nudges while the *same prompt* is still open", but the
+   state machine reused the prompt reminder deadline for completions too. Every finished
+   run therefore produced "π finished", then "π still needs your input" (the prompt
+   reminder title) at +20 s and +40 s — the same reminder three times. Completions now get
+   exactly one attempt; a completion suppressed by `dedupeMs` is retried as an *initial*
+   alert instead of being dropped or converted into a reminder.
+2. **Looking at the session did not end the series.** A focused attempt only skipped that
+   one delivery and rescheduled the next reminder (`AFocusedInitialAttemptStillEarnsItsReminders`),
+   and focus was sampled only at delivery time. So a user who came back to the terminal,
+   saw the prompt, and switched away again still earned every remaining reminder. This
+   supersedes §4.3 step 2's rationale: a reminder exists for someone who is *not* looking,
+   so a positive focus verdict now ends the wait's series. Looking is detected as early as
+   possible, too: `SessionStore` reports panes herdr positively selects (an event-driven
+   signal that arrives before the next reminder deadline), and the coordinator re-probes on
+   `NSWorkspace.didActivateApplicationNotification` for the cases the cheap check cannot
+   answer (a stale herdr snapshot, a registry-only session, which is reported as
+   `.needsTerminalProbe` and therefore treated as not-looking by the store). The probe's
+   fail-open "assume focused" verdict still only quiets the current attempt; ending a
+   series requires positive evidence (`FocusVerdict.confident`), so a broken Automation
+   permission cannot silence every remaining nudge.
+
+The standalone `/nudge` extension had the same two behaviours (reminders for
+`agent_settled` spans, and a focused check that only skipped a nudge); it was aligned.
+
 **Still needs a human**
 
 1. ~~Grant notification permission once (**Send test notification**) and confirm the banner

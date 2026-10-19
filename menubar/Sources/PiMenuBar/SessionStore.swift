@@ -10,6 +10,10 @@ final class SessionStore {
     private(set) var sessions: [Session] = []
     private(set) var acknowledgements: AcknowledgementStore
     var onChange: (() -> Void)?
+    /// Session keys the live focus check has positively identified as on screen. The
+    /// notifier uses this to end a wait's reminder series the moment herdr reports the
+    /// pane selection, which is earlier and more reliable than the next reminder probe.
+    var onLookingSessions: ((Set<String>) -> Void)?
 
     private let config: () -> MenuBarConfig
 
@@ -55,6 +59,7 @@ final class SessionStore {
             }
         }
         sessions = refreshed.sessions
+        if !refreshed.looking.isEmpty { onLookingSessions?(refreshed.looking) }
         onChange?()
     }
 

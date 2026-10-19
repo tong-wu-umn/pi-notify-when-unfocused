@@ -77,8 +77,11 @@ What alerts, and what does not:
 
 - a **blocking dialog** appears (approve/reject, select, input, editor) and you are
   looking at a different app or a different terminal pane;
-- a run settles after at least `idleMinRunMs` while you are away;
-- up to `reminders` extra nudges while the *same* prompt is still open;
+- a run settles after at least `idleMinRunMs` while you are away — **once**, with no
+  reminder series;
+- up to `reminders` extra nudges while the *same* prompt is still open — the series ends
+  as soon as you are back at that session's pane, even if you leave again without
+  answering;
 - nothing for a prompt that was already open when PiMenuBar started, nothing for short
   replies, and nothing for `/menubar simulate` — a restart never replays old banners.
 
