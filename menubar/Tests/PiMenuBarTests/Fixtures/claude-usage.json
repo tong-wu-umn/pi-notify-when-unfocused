@@ -1,0 +1,38 @@
+{
+  "five_hour": {
+    "utilization": 78.0,
+    "resets_at": "2026-10-23T16:50:00.147042+00:00"
+  },
+  "seven_day": {
+    "utilization": 9.0,
+    "resets_at": "2026-10-26T08:00:00.147064+00:00"
+  },
+  "limits": [
+    {
+      "kind": "session",
+      "percent": 78,
+      "severity": "warning",
+      "resets_at": "2026-10-23T16:50:00.147042+00:00",
+      "is_active": true
+    },
+    {
+      "kind": "weekly_all",
+      "percent": 9,
+      "severity": "normal",
+      "resets_at": "2026-10-26T08:00:00.147064+00:00",
+      "is_active": false
+    }
+  ],
+  "seven_day_breakdown": {
+    "rows": [
+      {
+        "key": "claude_code",
+        "percent": 100
+      }
+    ]
+  },
+  "tangelo": true,
+  "iguana_necktie": {
+    "nested": ["ignored", 1, null]
+  }
+}

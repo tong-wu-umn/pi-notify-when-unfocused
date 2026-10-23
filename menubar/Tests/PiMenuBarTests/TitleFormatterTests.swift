@@ -296,4 +296,42 @@ func registerConfigTests(_ t: TestRunner) {
         expectEqual(MenuBarConfig.load(path: path).notifications, NotificationConfig())
         expectEqual(MenuBarConfig.load(path: path).notifications.enabled, false)
     }
+
+    t.test("ClaudeUsageIsOnByDefault") {
+        let config = MenuBarConfig()
+        expectTrue(config.claudeUsage.enabled, "a fresh install shows usage without editing config")
+        expectEqual(config.claudeUsage.refreshIntervalMs, 900_000)
+        expectFalse(config.claudeUsage.showInTitle, "menu bar space is scarce")
+        expectEqual(config.claudeUsage.warningPercent, 75)
+    }
+
+    t.test("ClaudeUsageBlockLoadsAndClamps") {
+        let directory = TestSupport.TempDirectory()
+        let path = directory.write("config.json", """
+        {
+          "claudeUsage": {
+            "enabled": true,
+            "refreshIntervalMs": 1,
+            "showInTitle": true,
+            "warningPercent": 300,
+            "somethingNew": true
+          }
+        }
+        """)
+        let config = MenuBarConfig.load(path: path)
+        expectTrue(config.claudeUsage.enabled)
+        expectEqual(config.claudeUsage.refreshIntervalMs, 60_000, "clamped up to one minute")
+        expectTrue(config.claudeUsage.showInTitle)
+        expectEqual(config.claudeUsage.warningPercent, 100, "clamped")
+
+        let long = directory.write("long.json", "{\"claudeUsage\": {\"refreshIntervalMs\": 99999999}}")
+        expectEqual(MenuBarConfig.load(path: long).claudeUsage.refreshIntervalMs, 3_600_000)
+    }
+
+    t.test("AMalformedClaudeUsageBlockKeepsTheDefaults") {
+        let directory = TestSupport.TempDirectory()
+        let path = directory.write("config.json", "{\"claudeUsage\": \"yes please\"}")
+        expectEqual(MenuBarConfig.load(path: path).claudeUsage, ClaudeUsageConfig())
+        expectTrue(MenuBarConfig.load(path: path).claudeUsage.enabled)
+    }
 }

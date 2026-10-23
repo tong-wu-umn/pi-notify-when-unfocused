@@ -64,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var registry: RegistryWatcher!
     private var statusItem: StatusItemController!
     private var notifications: NotificationCoordinator!
+    private var claudeUsage: ClaudeUsageMonitor!
     private let focuser = Focuser()
     private var instanceLock: InstanceLock?
 
@@ -98,6 +99,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             client: client,
             config: { [weak self] in self?.configLoader.current ?? MenuBarConfig() }
         )
+        claudeUsage = ClaudeUsageMonitor(
+            config: { [weak self] in self?.configLoader.current ?? MenuBarConfig() }
+        )
 
         wire()
         // A wait is "seen" the moment the user is back at its pane, not only at the next
@@ -113,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notifications.start()
         registry.start()
         client.start()
+        claudeUsage.start()
         configLoader.start()
         store.recompute(registry: registry.records, herdrSnapshot: client.snapshot, herdrFresh: client.snapshotIsFresh)
     }
@@ -122,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store?.persist()
         client?.stop()
         registry?.stop()
+        claudeUsage?.stop()
         configLoader?.stop()
         Log.shared.info("PiMenuBar stopping")
         instanceLock?.release()
@@ -155,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.client.reconnect(reason: "config change")
             self.registry.scan()
+            self.claudeUsage.reconfigure()
             recompute()
         }
 
@@ -176,6 +183,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in await self.notifications.sendTestNotification() }
         }
         statusItem.onOpenNotificationSettings = { Self.openNotificationSettings() }
+        statusItem.claudeUsage = { [weak self] in self?.claudeUsage.state ?? .disabled }
+        statusItem.onRefreshClaudeUsage = { [weak self] in self?.claudeUsage.refreshNow() }
+        statusItem.onMenuOpened = { [weak self] in self?.claudeUsage.refreshIfStale(maxAge: 60) }
+        claudeUsage.onChange = { [weak self] in self?.statusItem.scheduleRender() }
     }
 
     @objc private func applicationActivated(_ notification: Notification) {

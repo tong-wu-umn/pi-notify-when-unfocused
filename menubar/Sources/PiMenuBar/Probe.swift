@@ -70,6 +70,10 @@ enum Probe {
             print("  notifications: off (opt in with \"notifications\": {\"enabled\": true} in ~/.pi/agent/menubar.json)")
         }
 
+        // Cache only: the probe stays offline and deterministic even when usage polling
+        // is enabled. `--probe-usage` is the live check.
+        print(cachedUsageLine(config: config))
+
         // The same live focus check the menu and the notifier use, so `--probe` reports the
         // badge and title the running app would show rather than herdr's pane selection.
         let merged = SessionMerger.merge(MergeInput(
@@ -130,5 +134,106 @@ enum Probe {
 
         // Non-zero when the pipeline could not see herdr, so scripts can assert on it.
         return snapshot == nil && resolution.chosen == nil ? 2 : 0
+    }
+
+    private static func cachedUsageLine(config: MenuBarConfig) -> String {
+        guard config.claudeUsage.enabled else {
+            return "claude usage: off (\"claudeUsage\": {\"enabled\": false})"
+        }
+        guard let snapshot = ClaudeUsageCache.load() else {
+            return "claude usage: no cached value yet"
+        }
+        var parts: [String] = []
+        if let session = snapshot.session { parts.append("5h \(session.percent)% (\(session.severity.rawValue))") }
+        if let weekly = snapshot.weekly { parts.append("7d \(weekly.percent)% (\(weekly.severity.rawValue))") }
+        if parts.isEmpty { parts.append("no limits reported") }
+        let age = DurationLabel.compact(from: snapshot.fetchedAt, to: Date())
+        return "claude usage: \(parts.joined(separator: " · ")) — cached \(age) ago"
+    }
+
+    /// `--probe-usage`: one live fetch, parsed and printed. No cache write, no daemon, and
+    /// never the token itself — this is how "why is the menu number different from
+    /// `/usage`" is answered from a terminal.
+    @MainActor
+    static func runUsage(arguments: [String]) -> Int32 {
+        let config = MenuBarConfig.load()
+        let print = { (line: String) in FileHandle.standardOutput.write(Data((line + "\n").utf8)) }
+
+        print("PiMenuBar usage probe")
+        if config.claudeUsage.enabled {
+            print("  claudeUsage:  enabled, every \(config.claudeUsage.refreshIntervalMs / 1000)s, warning at \(config.claudeUsage.warningPercent)%")
+        } else {
+            print("  claudeUsage:  disabled in config; probing anyway (this command is explicit)")
+        }
+
+        let credential: ClaudeCredential.Value
+        switch ClaudeCredential.load() {
+        case let .success(value):
+            credential = value
+            print("  credentials:  \(credentialDescription(value))")
+        case let .failure(failure):
+            switch failure {
+            case .notFound:
+                print("  credentials:  not found (has Claude Code logged in on this Mac?)")
+            case .malformed:
+                print("  credentials:  the keychain item is not the expected JSON shape")
+            case let .unreadable(status):
+                print("  credentials:  keychain read failed (OSStatus \(status))")
+            }
+            return 1
+        }
+
+        if arguments.contains("--credentials-only") { return 0 }
+        if credential.isExpired {
+            print("  response:     skipped — the access token is expired; open Claude Code to refresh it")
+            return 1
+        }
+
+        switch ClaudeUsageClient.fetchSync(token: credential.token) {
+        case let .failure(error):
+            print("  response:     failed — \(describe(error))")
+            return 1
+        case let .success(data):
+            do {
+                let snapshot = try ClaudeUsageParser.parse(
+                    data,
+                    now: Date(),
+                    warningPercent: config.claudeUsage.warningPercent
+                )
+                print("  response:     ok, \(data.count) bytes")
+                print("  fetched:      \(snapshot.fetchedAt.formatted(date: .abbreviated, time: .standard))")
+                if let share = snapshot.claudeCodeShare {
+                    print("  claude code:  \(share)% of the weekly limit")
+                }
+                let lines = ClaudeUsageFormat.menuLines(snapshot, now: Date())
+                if lines.isEmpty {
+                    print("  limits:       none reported by the API")
+                }
+                for (text, _) in lines {
+                    print("  \(text)")
+                }
+                return 0
+            } catch {
+                print("  response:     body was not JSON — the endpoint may have changed")
+                return 2
+            }
+        }
+    }
+
+    private static func credentialDescription(_ value: ClaudeCredential.Value) -> String {
+        guard let expiresAt = value.expiresAt else { return "found, expiry unknown" }
+        let now = Date()
+        if expiresAt > now {
+            return "found, expires in \(DurationLabel.compact(from: now, to: expiresAt))"
+        }
+        return "found, expired \(DurationLabel.compact(from: expiresAt, to: now)) ago"
+    }
+
+    private static func describe(_ error: ClaudeUsageFetchError) -> String {
+        switch error {
+        case let .http(code): return "HTTP \(code)"
+        case let .network(message): return "network error — \(message)"
+        case .invalidResponse: return "not an HTTP response"
+        }
     }
 }

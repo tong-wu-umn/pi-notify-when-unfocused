@@ -29,6 +29,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     var notificationStatus: (() -> NotificationStatus)?
     var onTestNotification: (() -> Void)?
     var onOpenNotificationSettings: (() -> Void)?
+    var claudeUsage: (() -> ClaudeUsageState)?
+    var onRefreshClaudeUsage: (() -> Void)?
+    /// Menu-open hook for a bounded usage refresh (the monitor applies the min-gap).
+    var onMenuOpened: (() -> Void)?
 
     init(store: SessionStore, client: HerdrClient, config: @escaping () -> MenuBarConfig, acknowledgements: @escaping () -> AcknowledgementStore) {
         self.store = store
@@ -60,14 +64,31 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let config = self.config()
         let sessions = store.sessions
         let title = TitleFormatter.title(sessions, showIdle: config.showIdle)
+        let usage = usageTitle(config: config)
+        let displayTitle = usage.map { "\(title) · \($0.suffix)" } ?? title
+        let renderKey = "\(displayTitle)|\(usage?.severity.rawValue ?? "none")"
         let hide = config.hideWhenEmpty && sessions.isEmpty
         if statusItem.isVisible == hide { statusItem.isVisible = !hide }
-        if force || title != lastTitle {
-            lastTitle = title
-            statusItem.button?.attributedTitle = attributedTitle(title, sessions: sessions)
+        if force || renderKey != lastTitle {
+            lastTitle = renderKey
+            statusItem.button?.attributedTitle = attributedTitle(
+                displayTitle,
+                baseTitle: title,
+                usage: usage
+            )
         }
         statusItem.button?.toolTip = tooltip(sessions)
         if isMenuOpen { rebuildMenu() }
+    }
+
+    /// `π 2▶ · 78%`, but only when both the config and a snapshot allow it.
+    private func usageTitle(config: MenuBarConfig) -> (suffix: String, severity: ClaudeUsageLimit.Severity)? {
+        guard config.claudeUsage.showInTitle,
+              let snapshot = claudeUsage?().snapshot
+        else { return nil }
+        let suffix = ClaudeUsageFormat.titleSuffix(snapshot)
+        guard !suffix.isEmpty else { return nil }
+        return (suffix, ClaudeUsageFormat.titleSeverity(snapshot))
     }
 
     /// One colour per state so the item reads at a glance; the glyphs already differ, so
@@ -82,8 +103,12 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// plain status item title, so it matches the neighbouring system items in every
     /// appearance. Alert states keep their explicit colour: they read on both light and
     /// dark bars, and being seen is the entire point of them.
-    private func attributedTitle(_ title: String, sessions: [Session]) -> NSAttributedString {
-        let counts = TitleFormatter.summary(sessions)
+    private func attributedTitle(
+        _ title: String,
+        baseTitle: String,
+        usage: (suffix: String, severity: ClaudeUsageLimit.Severity)?
+    ) -> NSAttributedString {
+        let counts = TitleFormatter.summary(store.sessions)
         let base = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
         let attributed = NSMutableAttributedString(string: title, attributes: [.font: base])
         let alert: NSColor?
@@ -98,7 +123,17 @@ final class StatusItemController: NSObject, NSMenuDelegate {
             attributed.addAttribute(
                 .foregroundColor,
                 value: alert,
-                range: NSRange(location: 0, length: attributed.length)
+                range: NSRange(location: 0, length: (baseTitle as NSString).length)
+            )
+        }
+        // Only the usage tail gets a severity colour; the rest of the title keeps the
+        // "no colour unless alerting" rule described above.
+        if let usage, usage.severity != .normal {
+            let start = (baseTitle as NSString).length
+            attributed.addAttribute(
+                .foregroundColor,
+                value: usage.severity == .critical ? NSColor.systemRed : NSColor.systemOrange,
+                range: NSRange(location: start, length: attributed.length - start)
             )
         }
         return attributed
@@ -124,6 +159,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         isMenuOpen = true
         startDurationTimer()
+        onMenuOpened?()
         rebuildMenu()
     }
 
@@ -199,6 +235,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
         addNotificationItems()
+        addClaudeUsageItems()
         addAction("Refresh now", #selector(refreshNow), key: "r")
         addAction("Open config…", #selector(revealConfig), key: "")
         addAction("Open registry folder", #selector(revealRegistry), key: "")
@@ -285,11 +322,102 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(item)
     }
 
+    /// `Claude Code usage — 12:46` plus one disabled row per limit. The section disappears
+    /// entirely when the feature is off, so an upgrade never adds a row nobody asked for.
+    private func addClaudeUsageItems() {
+        guard let state = claudeUsage?(), state != .disabled else { return }
+        menu.addItem(.separator())
+
+        let header = NSMenuItem(title: claudeUsageHeader(state), action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        if let snapshot = state.snapshot {
+            let lines = ClaudeUsageFormat.menuLines(snapshot, now: Date())
+            if lines.isEmpty {
+                let none = NSMenuItem(title: "no limits reported by the API", action: nil, keyEquivalent: "")
+                none.isEnabled = false
+                menu.addItem(none)
+            }
+            for (text, severity) in lines {
+                // A real (no-op) action keeps `autoenablesItems` from disabling the row;
+                // disabled menu text is dimmed, which made the orange nearly invisible.
+                let item = NSMenuItem(title: text, action: #selector(usageRowNoop), keyEquivalent: "")
+                item.target = self
+                // Monospaced so the padded percent and reset columns actually line up.
+                var attributes: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .medium),
+                ]
+                if let color = usageColor(severity) {
+                    attributes[.foregroundColor] = color
+                }
+                item.attributedTitle = NSAttributedString(string: text, attributes: attributes)
+                menu.addItem(item)
+            }
+        }
+
+        addAction("Refresh usage now", #selector(refreshClaudeUsage), key: "")
+    }
+
+    private func claudeUsageHeader(_ state: ClaudeUsageState) -> String {
+        switch state {
+        case .disabled:
+            return ""
+        case .noCredentials:
+            return "Claude Code usage — no credentials (open Claude Code once)"
+        case let .fresh(snapshot):
+            return "Claude Code usage — \(clock(snapshot.fetchedAt))"
+        case let .stale(snapshot, note):
+            return "Claude Code usage — \(clock(snapshot.fetchedAt)) · \(note)"
+        case let .unavailable(note):
+            return "Claude Code usage — \(note)"
+        }
+    }
+
+    private func clock(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    /// Warning/critical text needs a darker ink on the light menu background. The system
+    /// orange/red are tuned for the dark menu bar and wash out on light gray; keep the
+    /// vivid system colours for dark appearance, where they read well.
+    private func usageColor(_ severity: ClaudeUsageLimit.Severity) -> NSColor? {
+        func isDark(_ appearance: NSAppearance) -> Bool {
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        }
+        switch severity {
+        case .normal:
+            return nil
+        case .warning:
+            return NSColor(name: nil) { appearance in
+                isDark(appearance)
+                    ? NSColor.systemOrange
+                    : NSColor(srgbRed: 0.60, green: 0.20, blue: 0.02, alpha: 1)
+            }
+        case .critical:
+            return NSColor(name: nil) { appearance in
+                isDark(appearance)
+                    ? NSColor.systemRed
+                    : NSColor(srgbRed: 0.72, green: 0.11, blue: 0.11, alpha: 1)
+            }
+        }
+    }
+
     // MARK: - Actions
 
     @objc private func refreshNow() {
         onRefresh?()
     }
+
+    @objc private func refreshClaudeUsage() {
+        onRefreshClaudeUsage?()
+    }
+
+    /// Usage rows are informational. They nevertheless need an action because a nil-action
+    /// item is auto-disabled (and therefore dimmed) by `NSMenu.autoenablesItems`.
+    @objc private func usageRowNoop() {}
 
     @objc private func revealLog() { onRevealLog?() }
     @objc private func testNotification() { onTestNotification?() }

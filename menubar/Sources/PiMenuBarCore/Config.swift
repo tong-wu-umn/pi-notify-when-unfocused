@@ -28,6 +28,9 @@ public struct MenuBarConfig: Sendable, Equatable {
     /// PiMenuBar-owned native notifications. Off by default: enabling them while the
     /// root `notify-when-unfocused` extension is still loaded would alert twice.
     public var notifications = NotificationConfig()
+    /// Optional Claude subscription usage readout. Off by default: enabling it reads the
+    /// Claude Code keychain item and makes one HTTPS request per refresh.
+    public var claudeUsage = ClaudeUsageConfig()
 
     public enum LogLevel: String, Sendable, Codable, CaseIterable {
         case debug, info, warn, error
@@ -95,6 +98,9 @@ public struct MenuBarConfig: Sendable, Equatable {
         if let value = raw["notifications"] as? [String: Any] {
             config.notifications = NotificationConfig.parse(value)
         }
+        if let value = raw["claudeUsage"] as? [String: Any] {
+            config.claudeUsage = ClaudeUsageConfig.parse(value)
+        }
 
         // A heartbeat slower than the staleness window would make every row look dead.
         if config.heartbeatMs * 4 > config.staleAfterMs { config.staleAfterMs = config.heartbeatMs * 4 }
@@ -157,6 +163,46 @@ public struct NotificationConfig: Sendable, Equatable {
         if let value = raw["preciseFocus"] as? Bool { config.preciseFocus = value }
         if let value = raw["notifyUnknownDurationCompletions"] as? Bool { config.notifyUnknownDurationCompletions = value }
         if let value = raw["showProjectName"] as? Bool { config.showProjectName = value }
+        return config
+    }
+
+    private static func int(_ any: Any?) -> Int? {
+        switch any {
+        case let value as Int: return value
+        case let value as Double: return Int(value)
+        case let value as NSNumber: return value.intValue
+        default: return nil
+        }
+    }
+
+    private static func clamp(_ value: Int, _ lower: Int, _ upper: Int) -> Int {
+        min(max(value, lower), upper)
+    }
+}
+
+/// The optional Claude Code usage section.
+///
+/// Enabled by default so a fresh install shows the subscription limits without editing
+/// config. The first refresh reads the Claude Code keychain item (one-time macOS prompt)
+/// and makes one small HTTPS request per interval.
+public struct ClaudeUsageConfig: Sendable, Equatable {
+    public var enabled: Bool = true
+    /// 15 minutes ≈ 96 small requests per day.
+    public var refreshIntervalMs: Int = 900_000
+    /// Off by default because menu bar space is the scarcest resource in this app.
+    public var showInTitle: Bool = false
+    /// Fallback for the ⚠ glyph when the API does not return its own `severity`.
+    public var warningPercent: Int = 75
+
+    public init() {}
+
+    /// Parses the `claudeUsage` object, keeping defaults for anything malformed.
+    public static func parse(_ raw: [String: Any]) -> ClaudeUsageConfig {
+        var config = ClaudeUsageConfig()
+        if let value = raw["enabled"] as? Bool { config.enabled = value }
+        if let value = int(raw["refreshIntervalMs"]) { config.refreshIntervalMs = clamp(value, 60_000, 3_600_000) }
+        if let value = raw["showInTitle"] as? Bool { config.showInTitle = value }
+        if let value = int(raw["warningPercent"]) { config.warningPercent = clamp(value, 0, 100) }
         return config
     }
 

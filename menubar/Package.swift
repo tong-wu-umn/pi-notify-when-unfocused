@@ -27,6 +27,7 @@ let package = Package(
             name: "PiMenuBarTests",
             dependencies: ["PiMenuBarCore"],
             path: "Tests/PiMenuBarTests",
+            exclude: ["Fixtures"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

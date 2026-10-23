@@ -114,6 +114,63 @@ every alert.
 
 ---
 
+## Claude Code usage
+
+PiMenuBar shows the Claude subscription's 5-hour and 7-day limit utilisation next to the
+session counts. It is **on by default**; set `claudeUsage.enabled: false` to remove the
+section and stop all keychain/network activity. It reads the same HTTPS endpoint as the
+`/usage` screen — **no `claude` subprocess and no inference request**, so it costs no
+tokens.
+
+```json
+{
+  "claudeUsage": {
+    "enabled": true,
+    "refreshIntervalMs": 900000,
+    "showInTitle": false,
+    "warningPercent": 75
+  }
+}
+```
+
+| Key | Default | Notes |
+|---|---|---|
+| `enabled` | `true` | On by default; the first refresh triggers the keychain prompt below |
+| `refreshIntervalMs` | `900000` (15 min) | Clamped to 1 minute … 1 hour |
+| `showInTitle` | `false` | Adds `· 78%` to the status title; off because menu bar space is scarce |
+| `warningPercent` | `75` | Fallback for the ⚠ glyph when the API omits its own severity; ≥90 is red |
+
+The menu section looks like:
+
+```
+Claude Code usage — 12:46
+  5-hour   78%  ⚠  resets in 2h 4m
+  7-day     9%     resets Mon 04:00
+Refresh usage now
+```
+
+**Keychain prompt.** The access token lives in the login keychain as the generic password
+`Claude Code-credentials`, written by the CLI. The first read shows *“PiMenuBar wants to
+use your confidential information stored in Claude Code-credentials”*; choose **Always
+Allow** so refreshes stay silent. Builds are ad-hoc signed, so a rebuilt or reinstalled
+binary can be a different code identity and prompt again. PiMenuBar never reads the
+refresh token and never refreshes it: once `expiresAt` passes it stops polling and says
+so, and the CLI rotates the token on its own the next time you use it.
+
+| Symptom | Check |
+|---|---|
+| `Claude Code usage — no credentials` | Claude Code has never logged in on this Mac, or the keychain item was deleted. Open the CLI once |
+| `token expired — open Claude Code` | the CLI has not refreshed the token yet; run it once, then **Refresh usage now** |
+| `re-authenticate` after logging in again | the old token was revoked. The next refresh picks up the new keychain value; if it does not, restart PiMenuBar |
+| `offline` or an old timestamp | the last good numbers stay on screen. Network and 429/5xx failures are expected to be transient |
+| Numbers differ from `/usage` | `make probe-usage` prints the live parsed payload; the endpoint is unofficial and its shape can change |
+
+With `enabled: false` there is no keychain access and no network traffic. Disabling it
+also removes the menu section; the cached percentages can be deleted with
+`~/Library/Application Support/PiMenuBar/claude-usage.json`.
+
+---
+
 ## Requirements
 
 - macOS 13 or newer
@@ -125,7 +182,7 @@ every alert.
 
 ```bash
 cd menubar
-make test          # 122 tests, no XCTest required
+make test          # 163 tests, no XCTest required
 make probe         # print what the menu bar would show right now
 make run           # build PiMenuBar.app and launch it
 make install       # app in ~/Applications + extension + login item
@@ -170,8 +227,10 @@ herdr socket ─── events.subscribe + session.snapshot ──────┘
   still shown rather than silently dropped.
 
 The app never writes pi's state: it never calls `pane.report_agent` (herdr's own managed
-`pi` integration owns that) and it never sends notifications. It owns exactly one thing on
-disk: `~/Library/Application Support/PiMenuBar/acknowledgements.json`.
+`pi` integration owns that) and it never sends notifications. It owns two things on
+disk: `~/Library/Application Support/PiMenuBar/acknowledgements.json`, and — only when
+`claudeUsage.enabled` is on — `claude-usage.json` (percentages and timestamps, never a
+token).
 
 ---
 
@@ -208,6 +267,12 @@ ignored, malformed files fall back to defaults, and the app reloads on change:
     "preciseFocus": true,
     "notifyUnknownDurationCompletions": false,
     "showProjectName": true
+  },
+  "claudeUsage": {
+    "enabled": false,
+    "refreshIntervalMs": 900000,
+    "showInTitle": false,
+    "warningPercent": 75
   }
 }
 ```
@@ -222,6 +287,7 @@ ignored, malformed files fall back to defaults, and the app reloads on change:
 | `notifications.*` | Native banners. Off by default; see [Native notifications](#native-notifications-optional) |
 | `notifications.dedupeMs` | Suppresses a second banner this soon after the previous one, across sessions |
 | `notifications.notifyUnknownDurationCompletions` | Off, because a herdr-only `done` row cannot prove the run was not a two-second reply |
+| `claudeUsage.*` | Subscription-usage readout, on by default; see [Claude Code usage](#claude-code-usage) |
 
 Extension env overrides: `PI_MENUBAR_ENABLED=0` (disable one session),
 `PI_MENUBAR_REGISTRY_DIR=/somewhere/else`.
@@ -254,6 +320,7 @@ Development helpers:
 ```bash
 make probe                 # integration check against the live herdr, no GUI
 make probe-json            # same, machine readable
+make probe-usage           # one live Claude usage fetch, parsed and printed
 ./dev/fake-sessions.sh 24  # 24 simulated rows (expiring) to test layout and sorting
 ./dev/fake-sessions.sh 0   # clean up
 ```
@@ -268,7 +335,9 @@ make probe-json            # same, machine readable
   Focus mode, per-app settings, and Notification Center history keep working.
 - Does not read macOS Focus/DND state: there is no supported API for it.
 - Not a dashboard for remote machines: one local herdr server at a time.
-- No TLS/network surface at all: one Unix socket, one local directory.
+- No network surface unless `claudeUsage.enabled` is on: then it is one optional HTTPS
+  `GET` to the usage endpoint, not a general-purpose client. The status item data itself
+  still comes from one Unix socket and one local directory.
 
 ## Troubleshooting
 
@@ -290,7 +359,7 @@ make probe-json            # same, machine readable
 ## Development notes
 
 - `swift test` is unavailable with Command Line Tools only (no XCTest), so the suite runs
-  as a normal executable: `make test` → `swift run PiMenuBarTests` (140 tests) plus
+  as a normal executable: `make test` → `swift run PiMenuBarTests` (163 tests) plus
   `node --test extension/` (25 tests). `PiMenuBarCore` holds everything testable —
   including the notification decision table and the focus rules — and the AppKit shell is
   deliberately thin.

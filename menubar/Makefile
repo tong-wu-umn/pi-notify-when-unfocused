@@ -18,7 +18,7 @@ LAUNCH_AGENT := $(HOME)/Library/LaunchAgents/$(BUNDLE_ID).plist
 GUI_DOMAIN := gui/$(shell id -u)
 
 .DEFAULT_GOAL := help
-.PHONY: help build test probe run app icon install install-app install-extension install-agent uninstall clean dist
+.PHONY: help build test probe probe-json probe-usage run app icon install install-app install-extension install-agent uninstall clean dist
 
 help:
 	@echo "PiMenuBar $(VERSION)"
@@ -27,6 +27,7 @@ help:
 	@echo "  make test               run both suites (Swift core + extension; no XCTest)"
 	@echo "  make probe              print what the menu bar would show right now"
 	@echo "  make probe-json         same, as JSON (good for scripts)"
+	@echo "  make probe-usage        live Claude usage fetch (needs Claude Code login)"
 	@echo "  make app                assemble .build/PiMenuBar.app"
 	@echo "  make icon               regenerate Resources/PiMenuBar.icns"
 	@echo "  make run                build the bundle and launch it"
@@ -50,6 +51,9 @@ probe:
 
 probe-json:
 	swift run PiMenuBar --probe --json
+
+probe-usage:
+	swift run PiMenuBar --probe-usage
 
 app: build
 	@rm -rf "$(APP_BUNDLE)"
@@ -107,6 +111,8 @@ install: install-app install-extension install-agent
 	@echo "PiMenuBar installed. Notes:"
 	@echo "  • the app is a login item now; quit it from its menu to stop it"
 	@echo "  • pi sessions must /reload once to publish registry data"
+	@echo "  • Claude usage is on by default; allow keychain access once (Always Allow)"
+	@echo "    turn it off with \"claudeUsage\": {\"enabled\": false} in ~/.pi/agent/menubar.json"
 	@echo ""
 	@echo "Native notifications are off until you opt in (they would double up with"
 	@echo "the notify-when-unfocused extension otherwise):"
